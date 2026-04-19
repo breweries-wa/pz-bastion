@@ -17,7 +17,8 @@
 11. [NPC Representation](#11-npc-representation)
 12. [Comparable Games & Borrowed Mechanics](#12-comparable-games--borrowed-mechanics)
 13. [Implementation Phases](#13-implementation-phases)
-14. [Open Questions](#14-open-questions)
+14. [Phase 1 Test Plan](#14-phase-1-test-plan)
+15. [Open Questions](#15-open-questions)
 
 ---
 
@@ -566,7 +567,305 @@ The settlement log and ambient sounds carry the simulation. Physical presence is
 
 ---
 
-## 14. Open Questions
+## 14. Phase 1 Test Plan
+
+These are manual in-game tests. Each test has a precondition, numbered steps, and a pass condition. Run them in order — later tests assume earlier ones passed. All tests use a fresh single-player save with Bastion enabled.
+
+> **Legend:** ✅ Pass | ❌ Fail | ⚠ Partial / needs investigation
+
+---
+
+### Group 1 — Bastion Establishment
+
+**T1.1 — Establish Bastion in a building**
+- *Precondition:* Player is inside a building. No bastion exists.
+- Steps:
+  1. Right-click inside the building.
+  2. Select "Establish Bastion."
+- *Pass:* Option appears in the context menu. Clicking it does not produce an error. Console prints a confirmation.
+
+**T1.2 — Cannot establish a second bastion**
+- *Precondition:* T1.1 passed. A bastion exists.
+- Steps:
+  1. Right-click inside a different building.
+- *Pass:* "Establish Bastion" does not appear. Only "Collapse Bastion" is available (if inside the bastion building).
+
+**T1.3 — Collapse Bastion removes it**
+- *Precondition:* T1.1 passed. Player is inside their bastion.
+- Steps:
+  1. Right-click inside the bastion.
+  2. Select "Collapse Bastion."
+  3. Right-click inside the same building again.
+- *Pass:* "Establish Bastion" reappears. World ModData for this player is cleared.
+
+**T1.4 — Bastion persists across save and load**
+- *Precondition:* T1.1 passed.
+- Steps:
+  1. Save and quit.
+  2. Load the same save.
+  3. Right-click inside the bastion building.
+- *Pass:* "Collapse Bastion" appears (not "Establish Bastion"). The bastion record survived the reload.
+
+---
+
+### Group 2 — Settlement Boundary
+
+**T2.1 — Safehouse boundary is recognised**
+- *Precondition:* Player has claimed a safehouse via PZ's vanilla UI (Esc → Safehouse). T1.1 passed inside that same building.
+- Steps:
+  1. Open the console. Run a debug print of `SafeHouse.getSafehouseContaining(player:getSquare())`.
+- *Pass:* Returns a non-nil safehouse object. The bastion's stored boundary matches the safehouse tiles.
+
+**T2.2 — Containers inside the boundary are in scope**
+- *Precondition:* T2.1 passed.
+- Steps:
+  1. Place a crate inside the safehouse boundary.
+  2. Trigger a manual tick (or advance one in-game day).
+  3. Check the settlement log.
+- *Pass:* The crate appears in the community storage inventory count. Log reflects correct item totals.
+
+**T2.3 — Containers outside the boundary are ignored**
+- *Precondition:* T2.2 passed.
+- Steps:
+  1. Place a crate one tile outside the safehouse boundary.
+  2. Put a distinctive item (e.g., a single baseball bat) in it.
+  3. Trigger a tick.
+- *Pass:* The item does not appear in the community item registry. Storage totals do not include it.
+
+---
+
+### Group 3 — Settler Spawning & Persistence
+
+**T3.1 — Establishing a bastion spawns a settler**
+- *Precondition:* Fresh save, no bastion.
+- Steps:
+  1. Establish a Bastion (T1.1).
+  2. Look around the building interior.
+- *Pass:* At least one NPC (mannequin or other representation) is present inside the building. A settler arrival entry appears in the settlement log.
+
+**T3.2 — Settler persists across save and load**
+- *Precondition:* T3.1 passed.
+- Steps:
+  1. Note the settler's position.
+  2. Save and quit.
+  3. Load the save.
+- *Pass:* The settler is present at the same position. Their name and role are unchanged.
+
+**T3.3 — Collapsing the bastion removes settlers**
+- *Precondition:* T3.1 passed.
+- Steps:
+  1. Collapse the bastion (T1.3).
+  2. Check the building interior.
+- *Pass:* Settler NPC objects are removed from the world. No orphaned mannequins remain.
+
+---
+
+### Group 4 — NPC Generation
+
+**T4.1 — Generated settler has a name**
+- *Precondition:* T3.1 passed.
+- Steps:
+  1. Right-click the settler.
+  2. Check the settlement log arrival entry.
+- *Pass:* A first and last name is shown. It is not "nil," blank, or a placeholder.
+
+**T4.2 — Generated settler has a role**
+- *Precondition:* T4.1 passed.
+- Steps:
+  1. Check the settler's role in the arrival log or right-click info.
+- *Pass:* A role name is assigned (e.g., "Cook," "Woodcutter," "Farmer"). Not blank.
+
+**T4.3 — Generated settler has a trait tag**
+- *Precondition:* T4.1 passed.
+- Steps:
+  1. Check the arrival log entry for the settler.
+- *Pass:* One trait tag is listed (e.g., "Optimist," "Nervous"). Not blank.
+
+**T4.4 — Generated settler has a backstory seed**
+- *Precondition:* T4.1 passed.
+- Steps:
+  1. Read the arrival log entry.
+- *Pass:* A one-line backstory in the format `[occupation] from [location] who [circumstance]` is present.
+
+**T4.5 — Multiple settlers have distinct names and tags**
+- *Precondition:* At least two settlers have arrived.
+- Steps:
+  1. Compare names and trait tags across settlers.
+- *Pass:* Names differ. Trait tags may coincide occasionally (random) but should not be identical for every settler.
+
+---
+
+### Group 5 — Community Storage
+
+**T5.1 — Community containers default to shared**
+- *Precondition:* T2.2 passed. A container exists inside the boundary.
+- Steps:
+  1. Inspect the container.
+- *Pass:* UI indicates it is community-owned (not private). No player action required to make it shared.
+
+**T5.2 — Marking a container private excludes it**
+- *Precondition:* T5.1 passed.
+- Steps:
+  1. Right-click a container → "Mark as Private."
+  2. Put a distinctive item in it.
+  3. Trigger a tick.
+- *Pass:* The item does not appear in the community item registry or storage totals. Log does not reference it.
+
+**T5.3 — Re-marking a private container as shared restores it**
+- *Precondition:* T5.2 passed.
+- Steps:
+  1. Right-click the private container → "Mark as Shared" (or toggle off Private).
+  2. Trigger a tick.
+- *Pass:* The item reappears in community storage totals on the next tick.
+
+**T5.4 — Refrigerated containers tracked separately**
+- *Precondition:* A fridge exists inside the settlement boundary.
+- Steps:
+  1. Put food in the fridge.
+  2. Check the Community Status panel.
+- *Pass:* Refrigerated storage shows a non-zero item count or weight distinct from general storage.
+
+**T5.5 — Frozen containers tracked separately**
+- *Precondition:* A freezer exists inside the settlement boundary.
+- Steps:
+  1. Put food in the freezer.
+  2. Check the Community Status panel.
+- *Pass:* Frozen storage shows a non-zero value distinct from refrigerated and general.
+
+**T5.6 — Storage capacity warning when full**
+- *Precondition:* Community storage exists.
+- Steps:
+  1. Fill all community containers to capacity.
+  2. Trigger a tick that would produce output (e.g., Woodcutter should add logs).
+- *Pass:* Log entry warns that storage is full and output was not deposited. Specialist did not silently discard output.
+
+---
+
+### Group 6 — Settlement Tick
+
+**T6.1 — Tick fires once per in-game day**
+- *Precondition:* Bastion established, at least one settler with a role.
+- Steps:
+  1. Note current in-game time.
+  2. Sleep or wait through to the next day.
+  3. Check the settlement log.
+- *Pass:* A new batch of tick entries appears dated to the new day. No duplicate tick entries for the same day.
+
+**T6.2 — Tick produces log output for each active role**
+- *Precondition:* T6.1 passed. At least one specialist with requirements met.
+- Steps:
+  1. Ensure a Woodcutter has an axe and wood is available.
+  2. Advance one day.
+  3. Open the settlement log.
+- *Pass:* A log entry for the Woodcutter's action appears with their name and a specific outcome (items collected or produced).
+
+**T6.3 — Tick logs a skip when requirements are not met**
+- *Precondition:* A Cook specialist exists. Remove all fuel from community storage.
+- Steps:
+  1. Advance one day.
+  2. Check the log.
+- *Pass:* An entry appears saying the Cook could not work and states the reason (no fuel). No crash. No silent skip.
+
+**T6.4 — Tick does not fire more than once per day**
+- *Precondition:* T6.1 passed.
+- Steps:
+  1. Save, quit, and reload mid-day.
+  2. Advance to end of that same in-game day.
+- *Pass:* Only one tick's worth of log entries appears for that day, not two. Reloading mid-day does not double-fire the tick.
+
+---
+
+### Group 7 — Settlement Log UI
+
+**T7.1 — Log panel opens**
+- *Precondition:* Bastion established.
+- Steps:
+  1. Open the settlement log (keybind or menu TBD).
+- *Pass:* A panel opens without error. At minimum, the arrival log entry from T4.4 is visible.
+
+**T7.2 — Log is chronological, newest first**
+- *Precondition:* At least two days of tick entries exist.
+- Steps:
+  1. Open the log.
+- *Pass:* The most recent day's entries appear at the top. Older entries are below.
+
+**T7.3 — Log persists across save and load**
+- *Precondition:* T7.1 passed. Several log entries exist.
+- Steps:
+  1. Save and quit.
+  2. Load the save.
+  3. Open the log.
+- *Pass:* All prior log entries are still present. Nothing lost on reload.
+
+**T7.4 — Log color-coding is correct**
+- *Precondition:* Log contains at least one standard entry, one shortage/warning, and one arrival.
+- Steps:
+  1. Open the log.
+- *Pass:* Standard tick entries are white. Shortage/warning entries are yellow. Arrival entries are a distinct color (green or other).
+
+---
+
+### Group 8 — Food & Water HUD
+
+**T8.1 — Food days remaining is displayed**
+- *Precondition:* Community storage contains food. At least one settler is consuming food.
+- Steps:
+  1. Check the HUD.
+- *Pass:* A "Food: X days" metric is visible and shows a positive number.
+
+**T8.2 — Water days remaining is displayed**
+- *Precondition:* Community storage contains water or a rain barrel is in the settlement.
+- Steps:
+  1. Check the HUD.
+- *Pass:* A "Water: X days" metric is visible.
+
+**T8.3 — Values update after a tick**
+- *Precondition:* T8.1 and T8.2 passed. Note current values.
+- Steps:
+  1. Advance one in-game day.
+  2. Re-check HUD values.
+- *Pass:* Values have changed (decreased by approximately one day's consumption). Values do not stay static.
+
+**T8.4 — Shortage warning appears below threshold**
+- *Precondition:* Food supply is below 3 days' worth.
+- Steps:
+  1. Check the HUD and log.
+- *Pass:* HUD shows the food metric in a warning color (yellow or red). A log entry flags the shortage.
+
+---
+
+### Group 9 — Noise Score
+
+**T9.1 — Noise score is displayed**
+- *Precondition:* Bastion established.
+- Steps:
+  1. Check the HUD or Community Status panel.
+- *Pass:* A noise metric is visible (e.g., "Noise: 3 / 6").
+
+**T9.2 — Active Woodcutter increases noise score**
+- *Precondition:* No specialists active. Note baseline noise. Assign a Woodcutter.
+- Steps:
+  1. Advance one day.
+  2. Check noise score.
+- *Pass:* Noise score is higher than baseline. Difference matches the Woodcutter's defined noise contribution.
+
+**T9.3 — Noise budget suppresses over-budget activities**
+- *Precondition:* Woodcutter is active. Set noise budget to "Silent."
+- Steps:
+  1. Advance one day.
+  2. Check the log.
+- *Pass:* Log contains an entry stating the Woodcutter's tick was skipped due to the noise budget. No logs or planks were added to storage.
+
+**T9.4 — Removing noise budget restriction restores activity**
+- *Precondition:* T9.3 passed. Noise budget is still "Silent."
+- Steps:
+  1. Set noise budget back to "Normal."
+  2. Advance one day.
+- *Pass:* Woodcutter tick runs. Logs or planks are added to storage. No suppression message in log.
+
+---
+
+## 15. Open Questions
 
 | # | Question | Status | Notes |
 |---|----------|--------|-------|

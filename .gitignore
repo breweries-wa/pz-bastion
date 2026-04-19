@@ -1,0 +1,10 @@
+# Zomboid deploy target (not source)
+# Never commit from C:\Users\Ryan\Zomboid\mods\
+
+# OS junk
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Workshop upload staging
+*.zip

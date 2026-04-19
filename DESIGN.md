@@ -1,22 +1,23 @@
 # Bastion — Design Document
-> Project Zomboid Build 42 Mod | v0.4 Draft
+> Project Zomboid Build 42 Mod | v0.5 Draft
 
 ---
 
 ## Table of Contents
 1. [Concept](#1-concept)
-2. [Settlement Boundary](#2-settlement-boundary)
-3. [The Settlement Tick](#3-the-settlement-tick)
-4. [Community Scores](#4-community-scores)
-5. [Settlers & Specialists](#5-settlers--specialists)
-6. [NPC Generation](#6-npc-generation)
-7. [Resources & Storage](#7-resources--storage)
-8. [Threats & Defense](#8-threats--defense)
-9. [Communication & Feedback](#9-communication--feedback)
-10. [NPC Representation](#10-npc-representation)
-11. [Comparable Games & Borrowed Mechanics](#11-comparable-games--borrowed-mechanics)
-12. [Implementation Phases](#12-implementation-phases)
-13. [Open Questions](#13-open-questions)
+2. [Technical Constraints](#2-technical-constraints)
+3. [Settlement Boundary](#3-settlement-boundary)
+4. [The Settlement Tick](#4-the-settlement-tick)
+5. [Community Scores](#5-community-scores)
+6. [Settlers & Specialists](#6-settlers--specialists)
+7. [NPC Generation](#7-npc-generation)
+8. [Resources & Storage](#8-resources--storage)
+9. [Threats & Defense](#9-threats--defense)
+10. [Communication & Feedback](#10-communication--feedback)
+11. [NPC Representation](#11-npc-representation)
+12. [Comparable Games & Borrowed Mechanics](#12-comparable-games--borrowed-mechanics)
+13. [Implementation Phases](#13-implementation-phases)
+14. [Open Questions](#14-open-questions)
 
 ---
 
@@ -47,7 +48,50 @@ The long-term goal is a community that can sustain itself across five pillars:
 
 ---
 
-## 2. Settlement Boundary
+## 2. Technical Constraints
+
+What PZ's Lua modding API can and cannot do. These are hard limits, not design choices. Every system in this document should be read with these in mind.
+
+### 2.1 Truly Impossible (Java-side, no Lua exposure)
+
+**Animated, pathfinding NPCs.**
+PZ's character movement, pathfinding, and animation systems are Java. There is no Lua API to create a walking, animated NPC. The B42 team is building a native NPC system, but it is not yet moddable. Until that changes, settlers cannot physically move through the world. Every design element that implies a settler *doing something physically* — walking to the woodpile, patrolling a perimeter, following the player — is a simulation that exists only in the log. The NPC Representation section (Section 11) addresses what we can fake and how.
+
+**Modifying zombie noise/attraction AI.**
+Zombie pathfinding toward sound sources is Java. We cannot make zombies genuinely react to settlement noise. The simulation: schedule zombie spawns near the settlement at a rate derived from the noise score. The effect is the same from the player's perspective; the mechanism is different.
+
+**Real escort quests.**
+An NPC following the player through the open world requires pathfinding. Not possible. The mod version: the player finds a quest target, right-clicks to recruit them, and they appear at the settlement. The journey is implied, not animated.
+
+### 2.2 Requires Custom Simulation (PZ system not exposed or insufficient)
+
+**Settler skill advancement.**
+PZ's XP and skill system is for the player character only. Settler skill levels are plain numbers stored in ModData, incremented by our own logic each tick. It works; it's just not PZ's system.
+
+**Farmer interacting with crops.**
+PZ has a farming system, but whether it exposes enough Lua API for a mod to programmatically read crop state, water crops, and trigger harvests is unverified. May fall back to: Farmer adds harvested food to community inventory on tick, with no actual crop object interaction.
+
+**Refrigerated storage genuinely slowing spoilage.**
+In vanilla PZ, items inside a powered fridge spoil slower — that's Java-side, tied to the fridge object's power state. When we label a storage category "Refrigerated," we're tracking the label in ModData. The actual spoilage rate only slows if the item physically resides in a real fridge container. Our category labels and PZ's spoilage logic are separate systems; bridging them requires placing items in actual fridge objects, not just tagging containers.
+
+**Radio range detection.**
+We can check if the player carries a walkie-talkie. Whether we can read PZ's internal radio frequency and range system to validate that the player is actually in range of the settlement's ham radio is unverified. Fallback: a simple tile-distance check.
+
+### 2.3 Feasible but With Known Risks
+
+**Item registry performance.**
+Iterating every container in the settlement and every item in each container on every tick is fine at small scale. At large settlements it may cause frame hitches. The registry must be built with caching and should not scan the world more than once per tick.
+
+**Kitchen item drift.**
+Moving items between containers is technically possible. The risk is player surprise — personal items end up somewhere unexpected. Needs tight opt-out controls and conservative drift logic.
+
+### 2.4 The Consequence for Design Language
+
+Any place in this document that describes a settler *doing* something physically should be understood as shorthand for: **the tick runs, the log records it, the outcome is applied.** "Timmy walked to the treeline and chopped wood" means "the Woodcutter tick ran, two logs were added to community storage, and a log entry was written." There is no Timmy walking anywhere. This is not a limitation to apologize for — it is the design. The log is the simulation.
+
+---
+
+## 3. Settlement Boundary
 
 The settlement boundary determines what is "inside" the Bastion — which containers are community storage, which settlers are home, and what the zombie attraction radius covers.
 
@@ -59,7 +103,7 @@ PZ already tracks which tiles belong to a claimed safehouse and enforces rules a
 
 ---
 
-## 3. The Settlement Tick
+## 4. The Settlement Tick
 
 Settlers don't visibly walk around performing tasks. Instead, the simulation advances on a **settlement tick** — once per in-game day (adjustable). On each tick, each settler with an assigned role performs their function invisibly and the result is logged.
 
@@ -96,7 +140,7 @@ Critical shortages surface as notifications even when the log is closed.
 
 ---
 
-## 4. Community Scores
+## 5. Community Scores
 
 Community-wide metrics that influence settler behavior, production, and arrival rates. Two categories: objective resource gauges and slower-moving subjective scores.
 
@@ -147,7 +191,7 @@ Resolve: 41  [~]
 
 ---
 
-## 5. Settlers & Specialists
+## 6. Settlers & Specialists
 
 ### 5.1 Design Principle
 
@@ -206,7 +250,7 @@ New survivors arrive over time. Arrival rate is influenced by Happiness, Resolve
 
 ---
 
-## 6. NPC Generation
+## 7. NPC Generation
 
 Bastion uses PZ's RNG patterns for all settler generation. No hand-authored characters.
 
@@ -240,7 +284,7 @@ No death screen. Just a log entry, and silence.
 
 ---
 
-## 7. Resources & Storage
+## 8. Resources & Storage
 
 ### 7.1 Community Storage
 
@@ -298,7 +342,7 @@ This creates emergent organization. The player doesn't need to manually sort the
 
 ---
 
-## 8. Threats & Defense
+## 9. Threats & Defense
 
 ### 8.1 Noise Score
 
@@ -364,7 +408,7 @@ Predictable escalation: the player knows the horde is building and can prepare.
 
 ---
 
-## 9. Communication & Feedback
+## 10. Communication & Feedback
 
 ### 9.1 Settlement Log
 
@@ -404,7 +448,7 @@ Settlers are not quest-givers and do not deliver structured reports.
 
 ---
 
-## 10. NPC Representation
+## 11. NPC Representation
 
 This is the hardest unsolved design question in the mod.
 
@@ -453,7 +497,7 @@ The settlement log and ambient sounds carry the simulation. Physical presence is
 
 ---
 
-## 11. Comparable Games & Borrowed Mechanics
+## 12. Comparable Games & Borrowed Mechanics
 
 ### State of Decay 2 — Primary Reference
 **Borrow:** Score breakdown UI with all contributors listed. Negative spiral mechanics. Outpost-as-resource-provider for expansion.
@@ -475,7 +519,7 @@ The settlement log and ambient sounds carry the simulation. Physical presence is
 
 ---
 
-## 12. Implementation Phases
+## 13. Implementation Phases
 
 > **Current status:** Proof of concept. Right-click context menu works, Establish/Collapse Bastion sends server commands, a mannequin spawns. No game systems implemented yet.
 
@@ -522,7 +566,7 @@ The settlement log and ambient sounds carry the simulation. Physical presence is
 
 ---
 
-## 13. Open Questions
+## 14. Open Questions
 
 | # | Question | Status | Notes |
 |---|----------|--------|-------|

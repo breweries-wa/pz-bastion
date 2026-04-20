@@ -1,5 +1,5 @@
 # Bastion — Design Document
-> Project Zomboid Build 42 Mod | v0.5 Draft
+> Project Zomboid Build 42 Mod | v0.8 Draft
 
 ---
 
@@ -14,11 +14,12 @@
 8. [Resources & Storage](#8-resources--storage)
 9. [Threats & Defense](#9-threats--defense)
 10. [Communication & Feedback](#10-communication--feedback)
-11. [NPC Representation](#11-npc-representation)
-12. [Comparable Games & Borrowed Mechanics](#12-comparable-games--borrowed-mechanics)
-13. [Implementation Phases](#13-implementation-phases)
-14. [Phase 1 Test Plan](#14-phase-1-test-plan)
-15. [Open Questions](#15-open-questions)
+11. [Admin & Debug Controls](#11-admin--debug-controls)
+12. [NPC Representation](#12-npc-representation)
+13. [Comparable Games & Borrowed Mechanics](#13-comparable-games--borrowed-mechanics)
+14. [Implementation Phases](#14-implementation-phases)
+15. [Phase 1 Test Plan](#15-phase-1-test-plan)
+16. [Open Questions](#16-open-questions)
 
 ---
 
@@ -538,7 +539,107 @@ Normal operational data (exact food days, noise score, settler count) lives in t
 
 ---
 
-## 11. NPC Representation
+## 11. Admin & Debug Controls
+
+### 11.1 Philosophy
+
+Admin controls are split into two tiers by audience:
+
+- **Chat commands** — for server admins and hosts. Gated on `getAccessLevel()` (Admin or Moderator rank, or the singleplayer host). Match the mental model of PZ's own admin system, which is entirely command-based. Always available without special launch flags.
+- **Debug panel** — for the developer. Gated on `isDebugEnabled()` (requires `-debug` launch flag). A proper UI for operations that are too complex or tedious to type. Invisible to all players in normal use.
+
+Neither appears in the Bastion Window. Neither is accessible to regular players.
+
+---
+
+### 11.2 Chat Commands
+
+All commands are prefixed `/bastion`. The server-side handler checks access level before executing anything; unauthorized calls are silently ignored (no error surfaced to the caller).
+
+#### Settlement State
+
+| Command | Effect |
+|---------|--------|
+| `/bastion tick` | Force a settlement tick immediately, regardless of time of day |
+| `/bastion status` | Print current scores to the caller's chat (food, water, noise, settler count, threat) |
+| `/bastion reset` | Wipe the settlement record and re-establish in place (keeps building, clears all data) |
+| `/bastion collapse` | Full collapse — removes settlers and clears all data (same as Disband but from chat) |
+
+#### Scores & Resources
+
+| Command | Effect |
+|---------|--------|
+| `/bastion food <days>` | Set food days remaining (e.g. `/bastion food 14`) |
+| `/bastion water <days>` | Set water days remaining |
+| `/bastion noise <value>` | Set current noise score |
+| `/bastion score <name> <value>` | Set any named score directly (e.g. `/bastion score resolve 80`) |
+
+#### Settlers
+
+| Command | Effect |
+|---------|--------|
+| `/bastion settler list` | Print all settlers (index, name, role, mood) to caller's chat |
+| `/bastion settler add [role]` | Generate and add a new settler, optionally with a specific role |
+| `/bastion settler remove <index>` | Remove a settler by their list index |
+| `/bastion settler mood <index> <state>` | Set a settler's mood (Content / Struggling / Critical) |
+| `/bastion settler role <index> <role>` | Reassign a settler's role |
+
+#### Threat & Events
+
+| Command | Effect |
+|---------|--------|
+| `/bastion threat <tier>` | Trigger a threat event (probe / incursion / horde) |
+| `/bastion threat clear` | Clear current active threat |
+
+#### Utility
+
+| Command | Effect |
+|---------|--------|
+| `/bastion help` | Print available commands to caller's chat |
+| `/bastion version` | Print mod version and current data schema version |
+
+---
+
+### 11.3 Debug Panel
+
+A separate window, opened with a keybind (default `Ctrl+Shift+B`). Only renders if `isDebugEnabled()` returns true — the keybind does nothing in normal play. Not documented in the Bastion Window or any player-facing UI.
+
+The panel is a raw diagnostic and manipulation tool. It does not need to be polished. It exists to save the developer from typing long command strings during testing.
+
+#### Tabs
+
+**State**
+Raw view of the current settlement ModData record — key/value display of everything stored. Read-only; useful for spotting corruption or unexpected values without opening the Lua console.
+
+**Scores**
+Editable fields for every community score. Input boxes with an Apply button. Faster than `/bastion score` for testing multiple thresholds in sequence.
+
+**Settlers**
+Full editable roster. Select any settler and modify name, role, mood, skill level, trait tag, or backstory inline. Add settler (with role picker). Remove settler. Useful for scripting specific test scenarios.
+
+**Tick**
+Manual tick controls: fire tick now, advance N days at once, set `lastTickDay` directly to simulate time jumps. Shows the exact sequence of role evaluations from the last tick with pass/fail status for each requirement check.
+
+**Storage**
+View the current item registry by category (general / refrigerated / frozen). Inject a named item into community storage. Clear a category. Useful for testing food projection and Cook tick behavior without needing to physically place items.
+
+**Log**
+Same as the main Bastion Window log tab, but with a "Clear log" button and an entry filter by type. Useful when the log is full of noise during rapid tick testing.
+
+---
+
+### 11.4 Access Control Summary
+
+| Surface | Who Can Use It | Gate |
+|---------|---------------|------|
+| Chat commands | Host + Admin/Moderator rank | `getAccessLevel()` check server-side |
+| Debug panel | Developer only | `isDebugEnabled()` — requires `-debug` launch flag |
+| Bastion Window | Any player with a bastion | No gate |
+| Right-click menu | Any player | No gate (options are context-sensitive) |
+
+---
+
+## 12. NPC Representation
 
 This is the hardest unsolved design question in the mod.
 
@@ -587,7 +688,7 @@ The settlement log and ambient sounds carry the simulation. Physical presence is
 
 ---
 
-## 12. Comparable Games & Borrowed Mechanics
+## 13. Comparable Games & Borrowed Mechanics
 
 ### State of Decay 2 — Primary Reference
 **Borrow:** Score breakdown UI with all contributors listed. Negative spiral mechanics. Outpost-as-resource-provider for expansion.
@@ -609,7 +710,7 @@ The settlement log and ambient sounds carry the simulation. Physical presence is
 
 ---
 
-## 13. Implementation Phases
+## 14. Implementation Phases
 
 > **Current status:** Proof of concept. Right-click context menu works, Establish/Collapse Bastion sends server commands, a mannequin spawns. No game systems implemented yet.
 
@@ -656,7 +757,7 @@ The settlement log and ambient sounds carry the simulation. Physical presence is
 
 ---
 
-## 14. Phase 1 Test Plan
+## 15. Phase 1 Test Plan
 
 These are manual in-game tests. Each test has a precondition, numbered steps, and a pass condition. Run them in order — later tests assume earlier ones passed. All tests use a fresh single-player save with Bastion enabled.
 
@@ -954,7 +1055,7 @@ These are manual in-game tests. Each test has a precondition, numbered steps, an
 
 ---
 
-## 15. Open Questions
+## 16. Open Questions
 
 | # | Question | Status | Notes |
 |---|----------|--------|-------|
@@ -980,5 +1081,5 @@ These are manual in-game tests. Each test has a precondition, numbered steps, an
 
 ---
 
-*Bastion Design Document v0.7 — Working Draft*
+*Bastion Design Document v0.8 — Working Draft*
 *Maintain this file in the repo root. Update alongside implementation.*

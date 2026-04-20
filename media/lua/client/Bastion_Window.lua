@@ -85,9 +85,15 @@ function BastionOverviewPanel:populate(player)
     local fr, fg, fb = dayColor(fd, 7, 3)
     row(string.format("Food:      %.1f days", fd), fr, fg, fb)
 
-    local wd = rec.waterDays or 0
+    -- Water: show total (containers + settler pool) and pool breakdown if > 0
+    local wd   = rec.waterDays        or 0
+    local pool = rec.settlerWaterPool or 0
     local wr, wg, wb = dayColor(wd, 7, 2)
-    row(string.format("Water:     %.1f days", wd), wr, wg, wb)
+    if pool > 0.05 then
+        row(string.format("Water:     %.1f days  (%.1f from settler pool)", wd, pool), wr, wg, wb)
+    else
+        row(string.format("Water:     %.1f days", wd), wr, wg, wb)
+    end
 
     local ns = rec.noiseScore  or 0
     local nb = rec.noiseBudget or 6
@@ -107,6 +113,54 @@ function BastionOverviewPanel:populate(player)
     if rec.education and rec.education > 0 then
         row(string.format("Education: %d", rec.education))
     end
+
+    -- Infrastructure flags
+    if rec.cachedWaterSource ~= nil or rec.cachedHeatSource ~= nil then
+        row("")
+        row("Infrastructure:", 0.75, 0.65, 1.0)
+        local wsR, wsG, wsB = rec.cachedWaterSource and 0.4 or 1.0,
+                               rec.cachedWaterSource and 1.0 or 0.35,
+                               rec.cachedWaterSource and 0.4 or 0.35
+        row("  Water source: " .. (rec.cachedWaterSource and "found" or "NOT FOUND"), wsR, wsG, wsB, true)
+        local hsR, hsG, hsB = rec.cachedHeatSource and 0.4 or 1.0,
+                               rec.cachedHeatSource and 1.0 or 0.35,
+                               rec.cachedHeatSource and 0.4 or 0.35
+        row("  Heat source:  " .. (rec.cachedHeatSource  and "found" or "NOT FOUND"), hsR, hsG, hsB, true)
+        if rec.cachedHasAnimals then
+            row("  Animals:      present", 0.4, 1.0, 0.4, true)
+        end
+    end
+
+    -- Virtual yield (pending settler production)
+    local yield = rec.virtualYield
+    if yield then
+        local hasAny = false
+        for k, v in pairs(yield) do
+            if type(v) == "number" and v > 0 then hasAny = true; break end
+        end
+        if hasAny then
+            row("")
+            row("Settler production (pending):", 0.75, 0.65, 1.0)
+            -- Use YIELD_DISPLAY order if Bastion table is available client-side
+            local displayList = (Bastion and Bastion.YIELD_DISPLAY) or {}
+            local shown = {}
+            for _, entry in ipairs(displayList) do
+                local v = yield[entry.key]
+                if v and v > 0 then
+                    row(string.format("  %-22s %d", entry.label .. ":", math.floor(v)), 0.75, 0.9, 0.75, true)
+                    shown[entry.key] = true
+                end
+            end
+            -- Any yield keys not in the display list
+            for k, v in pairs(yield) do
+                if not shown[k] and type(v) == "number" and v > 0 then
+                    row(string.format("  %-22s %d", k .. ":", math.floor(v)), 0.75, 0.9, 0.75, true)
+                end
+            end
+            row("  (Item claiming coming in a future update)", 0.45, 0.45, 0.45, true)
+        end
+    end
+
     row("")
 
     -- Last 3 log entries for a quick glance
@@ -282,11 +336,15 @@ function BastionLogTabPanel:populate(player)
             { logType = "standard", day = 0, text = "(no log entries yet)" })
         return
     end
-    for _, entry in ipairs(rec.settlementLog) do
+    -- settlementLog stores newest at index 1; iterate in reverse so
+    -- the oldest is added first and newest appears at the bottom of the list.
+    local log = rec.settlementLog
+    for i = #log, 1, -1 do
+        local entry   = log[i]
         local display = "[Day " .. (entry.day or 0) .. "]  " .. (entry.text or "")
         self.listbox:addItem(display, entry)
     end
-    -- Scroll to newest entry
+    -- Scroll to bottom so the most recent entry is visible immediately.
     if self.listbox.vscroll then
         self.listbox.vscroll:setCurrentValue(
             self.listbox.vscroll.max or 0)

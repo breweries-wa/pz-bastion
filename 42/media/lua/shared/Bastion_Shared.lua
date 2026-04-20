@@ -12,9 +12,21 @@ Bastion.VERSION  = 1
 -- ── Tuning ────────────────────────────────────────────────────────────────────
 
 Bastion.SCAN_RANGE                   = 25    -- tiles around bx,by to scan for containers
-Bastion.MAX_LOG_ENTRIES              = 100
+Bastion.MAX_LOG_ENTRIES              = 200
 Bastion.CALORIES_PER_SETTLER_PER_DAY = 2000
-Bastion.WATER_PER_SETTLER_PER_DAY    = 4     -- rough units
+Bastion.WATER_PER_SETTLER_PER_DAY    = 4     -- units per settler per day
+
+-- Water-pool tuning
+Bastion.WATER_POOL_MAX          = 21.0  -- max settler-managed water (days); 3-week cap
+Bastion.WATER_PER_CARRIER_TICK  = 2.0   -- settler-days of water added per WaterCarrier per tick (skill 1)
+Bastion.WATER_CARRIER_SKILL_MOD = 0.3   -- extra days per skill level above 1
+Bastion.WATER_FLOOR_DAYS        = 2.0   -- settler roles stop consuming when actual+pool < this
+Bastion.WATER_SOURCE_SCAN_STEP  = 5     -- step size when scanning for water sources (perf)
+Bastion.WATER_SOURCE_CACHE_DAYS = 7     -- re-scan for water sources every N in-game days
+
+-- Scrap-to-ingot ratio for Blacksmith
+Bastion.SCRAP_PER_INGOT  = 4    -- scrap items consumed per ingot produced
+Bastion.SCRAP_FLOOR      = 10   -- minimum scrap count the blacksmith will never touch
 
 -- Spawn offsets from the bastion reference square for settler mannequins.
 Bastion.SETTLER_OFFSETS = {
@@ -34,25 +46,62 @@ Bastion.NOISE_BUDGET_LEVELS = { "Silent", "Quiet", "Normal", "Loud" }
 
 -- ── Role definitions ─────────────────────────────────────────────────────────
 -- noise: units this role adds to the settlement noise score per tick.
--- Tick logic lives in server; only shared metadata here.
 
 Bastion.ROLES = {
-    Woodcutter = { noise=3, display="Woodcutter" },
-    Cook       = { noise=1, display="Cook"       },
-    Farmer     = { noise=1, display="Farmer"     },
-    Doctor     = { noise=0, display="Doctor"     },
-    Teacher    = { noise=0, display="Teacher"    },
-    Mechanic   = { noise=2, display="Mechanic"   },
-    Tailor     = { noise=0, display="Tailor"     },
-    Trapper    = { noise=0, display="Trapper"    },
-    Fisher     = { noise=0, display="Fisher"     },
-    Forager    = { noise=0, display="Forager"    },
-    Defender   = { noise=2, display="Defender"   },
-    Hunter     = { noise=3, display="Hunter"     },
-    Child      = { noise=0, display="Child"      },
+    Woodcutter   = { noise=3, display="Woodcutter"    },
+    Cook         = { noise=1, display="Cook"          },
+    Farmer       = { noise=1, display="Farmer"        },
+    Doctor       = { noise=0, display="Doctor"        },
+    Teacher      = { noise=0, display="Teacher"       },
+    Mechanic     = { noise=2, display="Mechanic"      },
+    Tailor       = { noise=0, display="Tailor"        },
+    Trapper      = { noise=0, display="Trapper"       },
+    Fisher       = { noise=0, display="Fisher"        },
+    Forager      = { noise=0, display="Forager"       },
+    Defender     = { noise=2, display="Defender"      },
+    Hunter       = { noise=3, display="Hunter"        },
+    Child        = { noise=0, display="Child"         },
+    -- New in this phase:
+    Blacksmith   = { noise=3, display="Blacksmith"    },
+    Rancher      = { noise=0, display="Rancher"       },
+    WaterCarrier = { noise=0, display="Water Carrier" },
 }
 
 Bastion.STARTER_ROLES = { "Woodcutter", "Cook", "Farmer" }
+
+-- ── Per-role settings defaults ─────────────────────────────────────────────
+-- Override individual keys via rec.roleSettings[roleName][key].
+-- Read via Bastion.getSetting(rec, role, key).
+
+Bastion.ROLE_SETTINGS_DEFAULTS = {
+    Tailor       = { maxThread    = 50,  addPatches = false },
+    Doctor       = { maxBandages  = 20  },
+    Trapper      = { trapRadius   = 60  },
+    Fisher       = { fishRadius   = 80,  maxFishStock = 30 },
+    Cook         = { mealsPerDay  = 0,   allowDryGoods = false },
+    -- mealsPerDay=0 means "auto" (settlers + 1 buffer); set >0 to cap
+    Farmer       = { saveSeeds    = true },
+    Mechanic     = { vehicleRadius = 30, fuelOnly = false },
+    Blacksmith   = { maxIngots    = 20,  scrapFloor = 10 },
+    Woodcutter   = { maxPlanks    = 60,  keepFiresLit = true },
+    Rancher      = { minGrainReserve = 10 },
+    WaterCarrier = { collectRadius = 50  },
+}
+
+-- ── Virtual yield item keys ─────────────────────────────────────────────────
+-- Keys used in rec.virtualYield = { [key] = N, ... }
+-- Displayed in the window; item spawning comes in a later phase.
+
+Bastion.YIELD_DISPLAY = {
+    { key="thread",    label="Thread (units)"    },
+    { key="bandages",  label="Sterile Bandages"  },
+    { key="ingots",    label="Metal Ingots"      },
+    { key="meals",     label="Prepared Meals"    },
+    { key="fish",      label="Fresh Fish"        },
+    { key="meat",      label="Trap Catch (meat)" },
+    { key="planks",    label="Planks"            },
+    { key="firewood",  label="Firewood (loads)"  },
+}
 
 -- ── NPC Generation Tables ────────────────────────────────────────────────────
 
@@ -79,28 +128,12 @@ Bastion.NAMES = {
 }
 
 Bastion.TRAIT_TAGS = {
-    "Optimist",
-    "Nervous",
-    "Practical",
-    "Has Bad Dreams",
-    "Keeps to Herself",
-    "Keeps to Himself",
-    "Tells Bad Jokes",
-    "Believes in Something",
-    "Gets Quiet When It Rains",
-    "Former Teacher",
-    "Light Sleeper",
-    "Doesn't Talk About Before",
-    "Hard Worker",
-    "Cautious",
-    "Quick Temper",
-    "Good with Kids",
-    "Night Owl",
-    "Can't Sleep",
-    "Hums While Working",
-    "Never Wastes Anything",
-    "Keeps a Journal",
-    "Used to the Quiet",
+    "Optimist","Nervous","Practical","Has Bad Dreams","Keeps to Herself",
+    "Keeps to Himself","Tells Bad Jokes","Believes in Something",
+    "Gets Quiet When It Rains","Former Teacher","Light Sleeper",
+    "Doesn't Talk About Before","Hard Worker","Cautious","Quick Temper",
+    "Good with Kids","Night Owl","Can't Sleep","Hums While Working",
+    "Never Wastes Anything","Keeps a Journal","Used to the Quiet",
     "Counts Things to Stay Calm",
 }
 
@@ -130,20 +163,14 @@ Bastion.BACKSTORY = {
     },
 }
 
--- Settler right-click flavor lines, keyed by mood state.
 Bastion.SETTLER_LINES = {
     Content = {
-        "Doing alright.",
-        "Just keeping busy.",
-        "Could be worse.",
-        "We're making it work.",
-        "Thanks for checking in.",
+        "Doing alright.","Just keeping busy.","Could be worse.",
+        "We're making it work.","Thanks for checking in.",
     },
     Struggling = {
-        "I'm... managing.",
-        "Not a great week.",
-        "I'll be okay. Just need some time.",
-        "Things have been hard lately.",
+        "I'm... managing.","Not a great week.",
+        "I'll be okay. Just need some time.","Things have been hard lately.",
     },
     Critical = {
         "I can't keep doing this.",
@@ -152,14 +179,13 @@ Bastion.SETTLER_LINES = {
     },
 }
 
--- ── Utilities ─────────────────────────────────────────────────────────────────
+-- ── Utility functions ─────────────────────────────────────────────────────────
 
 function Bastion.pickRandom(t)
     if not t or #t == 0 then return nil end
     return t[ZombRand(#t) + 1]
 end
 
--- Build an existing-name set from a settlers list for collision avoidance.
 function Bastion.buildNameSet(settlers)
     local set = {}
     for _, s in ipairs(settlers or {}) do
@@ -168,7 +194,6 @@ function Bastion.buildNameSet(settlers)
     return set
 end
 
--- Generate a raw NPC data table.
 function Bastion.generateNPC(existingNames)
     existingNames = existingNames or {}
     local isMale   = ZombRand(2) == 0
@@ -199,13 +224,11 @@ function Bastion.generateNPC(existingNames)
     }
 end
 
--- Append an entry to the settlement log.
--- logType: "standard" | "warning" | "critical" | "arrival" | "milestone"
+-- Append a log entry.  Newest entries at front of list (index 1).
 function Bastion.addLog(rec, text, logType)
     rec.settlementLog = rec.settlementLog or {}
-    local day = Bastion.getCurrentDay()
     table.insert(rec.settlementLog, 1, {
-        day     = day,
+        day     = Bastion.getCurrentDay(),
         text    = text,
         logType = logType or "standard",
     })
@@ -214,7 +237,28 @@ function Bastion.addLog(rec, text, logType)
     end
 end
 
--- Safe current-day helper (returns 0 if getGameTime is unavailable).
+-- Read a per-role setting, falling back to the built-in default.
+function Bastion.getSetting(rec, role, key)
+    local override = rec.roleSettings and rec.roleSettings[role]
+    local val = override and override[key]
+    if val ~= nil then return val end
+    local defaults = Bastion.ROLE_SETTINGS_DEFAULTS[role]
+    return defaults and defaults[key]
+end
+
+-- Accumulate virtual yield, respecting the cap.
+-- Returns the amount actually added.
+function Bastion.addVirtualYield(rec, key, amount, cap)
+    rec.virtualYield = rec.virtualYield or {}
+    local cur    = rec.virtualYield[key] or 0
+    local space  = cap and math.max(0, cap - cur) or amount
+    local actual = math.min(amount, space)
+    if actual <= 0 then return 0 end
+    rec.virtualYield[key] = cur + actual
+    return actual
+end
+
+-- Safe current-day helper.
 function Bastion.getCurrentDay()
     if not getGameTime then return 0 end
     local ok, d

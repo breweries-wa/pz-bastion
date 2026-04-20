@@ -2,22 +2,22 @@
 -- Bastion_Window.lua  (media/lua/client/)
 -- Unified tabbed Bastion management window.
 -- Tabs: Overview | Settlers | Log | Settings
--- Resizable: drag the bottom-right grip.
+-- Resizable: drag the dotted grip in the bottom-right corner.
 -- Open via: BastionWindow.open(player)
 --           BastionWindow.toggle(player)
 -- ============================================================
 print("[Bastion] Window loading")
 
--- ── Constants ─────────────────────────────────────────────────────────────────
+-- ── Layout constants ──────────────────────────────────────────────────────────
 
-local DEF_W   = 500
-local DEF_H   = 440
+local DEF_W   = 520
+local DEF_H   = 450
 local MIN_W   = 400
 local MIN_H   = 320
-local TITLE_H = 30    -- room for UIFont.Medium title text
-local TAB_H   = 28    -- room for UIFont.Small tab labels
-local CONT_Y  = TITLE_H + TAB_H   -- 58 — top edge of content area
-local GRIP    = 14    -- bottom-right resize handle size
+local TITLE_H = 38    -- tall enough for UIFont.Medium without clipping
+local TAB_H   = 28
+local CONT_Y  = TITLE_H + TAB_H   -- 66 — top of content area
+local GRIP    = 16    -- bottom-right resize handle size (kept clear of content)
 
 local TABS = { "Overview", "Settlers", "Log", "Settings" }
 
@@ -31,6 +31,38 @@ local LOG_COLORS = {
     suppressed = { 0.45, 0.45, 0.45, 1.0 },
 }
 
+-- ── Text utilities ────────────────────────────────────────────────────────────
+
+-- Truncate text with "…" so it fits within maxW pixels at the given font.
+-- Falls back to a character-count estimate if getTextManager is unavailable.
+local function fitText(font, text, maxW)
+    if not text or maxW <= 0 then return text or "" end
+    local tm = getTextManager and getTextManager()
+    if not tm then
+        -- Rough fallback: ~6 px/char for Small, ~8 for Medium
+        local ppc = (font == UIFont.Small) and 6 or 8
+        local cap = math.floor(maxW / ppc)
+        if #text <= cap then return text end
+        return text:sub(1, math.max(1, cap - 3)) .. "..."
+    end
+    if tm:MeasureStringX(font, text) <= maxW then return text end
+    local dots  = "..."
+    local dotsW = tm:MeasureStringX(font, dots)
+    local avail = maxW - dotsW
+    if avail <= 0 then return dots end
+    -- Binary search for the longest prefix that fits
+    local lo, hi = 0, #text
+    while lo < hi do
+        local mid = math.floor((lo + hi + 1) / 2)
+        if tm:MeasureStringX(font, text:sub(1, mid)) <= avail then
+            lo = mid
+        else
+            hi = mid - 1
+        end
+    end
+    return text:sub(1, lo) .. dots
+end
+
 -- ── Shared helpers ────────────────────────────────────────────────────────────
 
 local function getModRec(player)
@@ -40,7 +72,7 @@ local function getModRec(player)
 end
 
 local function dayColor(v, good, warn)
-    if     v > good then return 0.4,  1.0, 0.4
+    if     v > good  then return 0.4,  1.0, 0.4
     elseif v >= warn then return 1.0,  0.9, 0.2
     else              return 1.0, 0.35, 0.35
     end
@@ -102,9 +134,9 @@ function BastionOverviewPanel:populate(player)
     local nb = rec.noiseBudget or 6
     local nk = rec.noiseBudgetLevel or "Normal"
     local nr, ng, nbl
-    if ns <= nb then nr, ng, nbl = 0.4, 1.0, 0.4
+    if     ns <= nb       then nr, ng, nbl = 0.4, 1.0, 0.4
     elseif ns <= nb * 1.5 then nr, ng, nbl = 1.0, 0.9, 0.2
-    else nr, ng, nbl = 1.0, 0.35, 0.35 end
+    else                       nr, ng, nbl = 1.0, 0.35, 0.35 end
     row(string.format("Noise:     %d / %d  [%s]", ns, nb, nk), nr, ng, nbl)
 
     if rec.happiness then row(string.format("Happiness: %d", rec.happiness)) end
@@ -119,11 +151,13 @@ function BastionOverviewPanel:populate(player)
         local wsR = rec.cachedWaterSource and 0.4 or 1.0
         local wsG = rec.cachedWaterSource and 1.0 or 0.35
         local wsB = rec.cachedWaterSource and 0.4 or 0.35
-        row("  Water source: " .. (rec.cachedWaterSource and "found" or "NOT FOUND"), wsR, wsG, wsB, true)
+        row("  Water source: " .. (rec.cachedWaterSource and "found" or "NOT FOUND"),
+            wsR, wsG, wsB, true)
         local hsR = rec.cachedHeatSource and 0.4 or 1.0
         local hsG = rec.cachedHeatSource and 1.0 or 0.35
         local hsB = rec.cachedHeatSource and 0.4 or 0.35
-        row("  Heat source:  " .. (rec.cachedHeatSource  and "found" or "NOT FOUND"), hsR, hsG, hsB, true)
+        row("  Heat source:  " .. (rec.cachedHeatSource  and "found" or "NOT FOUND"),
+            hsR, hsG, hsB, true)
         if rec.cachedHasAnimals then
             row("  Animals:      present", 0.4, 1.0, 0.4, true)
         end
@@ -132,7 +166,7 @@ function BastionOverviewPanel:populate(player)
     local yield = rec.virtualYield
     if yield then
         local hasAny = false
-        for k, v in pairs(yield) do
+        for _, v in pairs(yield) do
             if type(v) == "number" and v > 0 then hasAny = true; break end
         end
         if hasAny then
@@ -143,13 +177,15 @@ function BastionOverviewPanel:populate(player)
             for _, entry in ipairs(displayList) do
                 local v = yield[entry.key]
                 if v and v > 0 then
-                    row(string.format("  %-22s %d", entry.label .. ":", math.floor(v)), 0.75, 0.9, 0.75, true)
+                    row(string.format("  %-22s %d", entry.label .. ":", math.floor(v)),
+                        0.75, 0.9, 0.75, true)
                     shown[entry.key] = true
                 end
             end
             for k, v in pairs(yield) do
                 if not shown[k] and type(v) == "number" and v > 0 then
-                    row(string.format("  %-22s %d", k .. ":", math.floor(v)), 0.75, 0.9, 0.75, true)
+                    row(string.format("  %-22s %d", k .. ":", math.floor(v)),
+                        0.75, 0.9, 0.75, true)
                 end
             end
             row("  (Item claiming coming in a future update)", 0.45, 0.45, 0.45, true)
@@ -173,14 +209,18 @@ end
 
 function BastionOverviewPanel:render()
     ISPanel.render(self)
-    local y  = 8
-    local dx = 10
+    local y   = 8
+    local dx  = 10
+    -- Maximum text width: panel width minus left indent minus right margin
+    local maxW = self.width - dx - 8
     for _, r in ipairs(self.rows) do
         if r.text == "" then
             y = y + 7
         else
-            local x = r.indent and (dx + 14) or dx
-            self:drawText(r.text, x, y, r.r, r.g, r.b, 1.0, UIFont.Small)
+            local x    = r.indent and (dx + 14) or dx
+            local mw   = self.width - x - 8
+            local text = fitText(UIFont.Small, r.text, mw)
+            self:drawText(text, x, y, r.r, r.g, r.b, 1.0, UIFont.Small)
             y = y + 15
         end
         if y > self.height - 6 then break end
@@ -203,9 +243,10 @@ function BastionSettlersPanel:new(x, y, w, h)
 end
 
 function BastionSettlersPanel:createChildren()
+    -- Note: do NOT call lb:instantiate() — registering as a top-level UIManager
+    -- element before the parent hierarchy is ready corrupts the scroll state.
     local lb = ISScrollingListBox:new(0, 0, self.width, self.listH)
     lb:initialise()
-    lb:instantiate()
     lb.itemheight      = 18
     lb.doDrawItem      = BastionSettlersPanel.drawItem
     lb.backgroundColor = { r=0, g=0, b=0, a=0.3 }
@@ -251,7 +292,8 @@ function BastionSettlersPanel.drawItem(listbox, y, item, alt)
     if alt then
         listbox:drawRect(0, y, listbox:getWidth(), listbox.itemheight, 0.04, 0.5, 0.4, 0.6)
     end
-    listbox:drawText(item.text or "", 6, y + 2, r, g, b, 1.0, UIFont.Small)
+    local text = fitText(UIFont.Small, item.text or "", listbox:getWidth() - 12)
+    listbox:drawText(text, 6, y + 2, r, g, b, 1.0, UIFont.Small)
 end
 
 function BastionSettlersPanel:render()
@@ -268,6 +310,7 @@ function BastionSettlersPanel:render()
 
     local y  = dy + 8
     local dx = 10
+    local mw = self.width - dx - 10
 
     if not sel or not sel.name then
         self:drawText("Select a settler above to view their profile.",
@@ -275,7 +318,7 @@ function BastionSettlersPanel:render()
         return
     end
 
-    self:drawText(sel.name .. "  (" .. (sel.role or "?") .. ")",
+    self:drawText(fitText(UIFont.Medium, sel.name .. "  (" .. (sel.role or "?") .. ")", mw),
                   dx, y, 0.85, 0.75, 1.0, 1.0, UIFont.Medium)
     y = y + 22
 
@@ -286,13 +329,16 @@ function BastionSettlersPanel:render()
     self:drawText("Mood: " .. mood, dx, y, mr, mg, mb, 1.0, UIFont.Small)
     y = y + 16
 
-    self:drawText("Skill: " .. (sel.skillLevel or 1)
-                  .. "   Trait: " .. (sel.traitTag or "none"),
-                  dx, y, 0.75, 0.9, 0.75, 1.0, UIFont.Small)
+    self:drawText(
+        fitText(UIFont.Small,
+                "Skill: " .. (sel.skillLevel or 1) .. "   Trait: " .. (sel.traitTag or "none"),
+                mw),
+        dx, y, 0.75, 0.9, 0.75, 1.0, UIFont.Small)
     y = y + 16
 
     if sel.backstory and sel.backstory ~= "" then
-        self:drawText(sel.backstory, dx, y, 0.8, 0.8, 0.8, 1.0, UIFont.Small)
+        self:drawText(fitText(UIFont.Small, sel.backstory, mw),
+                      dx, y, 0.8, 0.8, 0.8, 1.0, UIFont.Small)
     end
 end
 
@@ -311,9 +357,9 @@ function BastionLogTabPanel:new(x, y, w, h)
 end
 
 function BastionLogTabPanel:createChildren()
+    -- Note: do NOT call lb:instantiate() — see BastionSettlersPanel for explanation.
     local lb = ISScrollingListBox:new(4, 4, self.width - 8, self.height - 8)
     lb:initialise()
-    lb:instantiate()
     lb.itemheight      = 18
     lb.doDrawItem      = BastionLogTabPanel.drawItem
     lb.backgroundColor = { r=0, g=0, b=0, a=0.3 }
@@ -341,6 +387,7 @@ function BastionLogTabPanel:populate(player)
         return
     end
     local log = rec.settlementLog
+    -- Newest at index 1; iterate reverse so oldest is added first → newest at bottom
     for i = #log, 1, -1 do
         local entry   = log[i]
         local display = "[Day " .. (entry.day or 0) .. "]  " .. (entry.text or "")
@@ -359,8 +406,8 @@ function BastionLogTabPanel.drawItem(listbox, y, item, alt)
     if alt then
         listbox:drawRect(0, y, listbox:getWidth(), listbox.itemheight, 0.04, 0.5, 0.4, 0.6)
     end
-    listbox:drawText(item.text or "", 6, y + 2,
-                     col[1], col[2], col[3], col[4] or 1.0, UIFont.Small)
+    local text = fitText(UIFont.Small, item.text or "", listbox:getWidth() - 12)
+    listbox:drawText(text, 6, y + 2, col[1], col[2], col[3], col[4] or 1.0, UIFont.Small)
 end
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -398,7 +445,7 @@ function BastionSettingsPanel:createChildren()
         table.insert(self.noiseBtns, btn)
     end
 
-    local disbandY = 136
+    local disbandY = 140
 
     self.disbandBtn = ISButton:new(dx, disbandY, 152, 24,
                                    "Disband Bastion",
@@ -452,19 +499,16 @@ function BastionSettingsPanel:render()
     local rec     = getModRec(self.player)
     local current = rec and rec.noiseBudgetLevel or "Normal"
     for _, btn in ipairs(self.noiseBtns) do
-        if btn.noiseLevelTag == current then
-            btn.backgroundColor = { r=0.35, g=0.22, b=0.55, a=0.95 }
-        else
-            btn.backgroundColor = { r=0.15, g=0.10, b=0.20, a=0.80 }
-        end
+        btn.backgroundColor = (btn.noiseLevelTag == current)
+            and { r=0.35, g=0.22, b=0.55, a=0.95 }
+            or  { r=0.15, g=0.10, b=0.20, a=0.80 }
     end
 
-    -- Disband section — two lines so text stays within window width
-    self:drawText("Disband Settlement", 14, 80, 0.65, 0.55, 0.55, 1.0, UIFont.Small)
-    self:drawText("This is permanent. All settlers will disperse",
-                  14, 98, 0.45, 0.45, 0.45, 0.9, UIFont.Small)
-    self:drawText("and the settlement record will be erased.",
-                  14, 113, 0.45, 0.45, 0.45, 0.9, UIFont.Small)
+    self:drawText("Disband Settlement", 14, 82, 0.65, 0.55, 0.55, 1.0, UIFont.Small)
+    self:drawText("This is permanent — all settlers disperse",
+                  14, 100, 0.45, 0.45, 0.45, 0.9, UIFont.Small)
+    self:drawText("and the settlement record is erased.",
+                  14, 116, 0.45, 0.45, 0.45, 0.9, UIFont.Small)
 end
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -478,7 +522,7 @@ function BastionWindow:new(x, y, player)
     o.backgroundColor = { r=0.05, g=0.04, b=0.08, a=0.92 }
     o.borderColor     = { r=0.5,  g=0.4,  b=0.7,  a=0.90 }
     o.player          = player
-    -- Window size (mutable for resize)
+    -- Mutable window size
     o.winW            = DEF_W
     o.winH            = DEF_H
     -- Drag state
@@ -493,11 +537,10 @@ function BastionWindow:new(x, y, player)
     o.resizeOriginMY  = 0
     o.resizeOriginW   = 0
     o.resizeOriginH   = 0
-    -- Refresh
+    -- Misc
     o.refreshCounter  = 0
-    -- Tab state
     o.currentTab      = "Overview"
-    -- Child references
+    -- Child refs
     o.closeBtn        = nil
     o.overviewPanel   = nil
     o.settlersPanel   = nil
@@ -506,11 +549,15 @@ function BastionWindow:new(x, y, player)
     return o
 end
 
+-- Content panels occupy CONT_Y..winH-GRIP, leaving the GRIP strip uncovered
+-- so onMouseDown can detect resize clicks without children intercepting them.
+local function contentH(winH) return winH - CONT_Y - GRIP end
+
 function BastionWindow:createChildren()
-    local contH = self.winH - CONT_Y
+    local cH = contentH(self.winH)
 
     -- Close button
-    local closeBtn = ISButton:new(self.winW - 26, 4, 22, 22, "x", self, BastionWindow.onClose)
+    local closeBtn = ISButton:new(self.winW - 26, 8, 22, 22, "x", self, BastionWindow.onClose)
     closeBtn.borderColor     = { r=0.5, g=0.3, b=0.3, a=0.8 }
     closeBtn.backgroundColor = { r=0.2, g=0.1, b=0.1, a=0.8 }
     closeBtn:initialise()
@@ -518,10 +565,10 @@ function BastionWindow:createChildren()
     self.closeBtn = closeBtn
 
     -- Content panels
-    local ovPanel = BastionOverviewPanel:new(0, CONT_Y, self.winW, contH)
-    local stPanel = BastionSettlersPanel:new(0, CONT_Y, self.winW, contH)
-    local lgPanel = BastionLogTabPanel:new(0, CONT_Y, self.winW, contH)
-    local sPanel  = BastionSettingsPanel:new(0, CONT_Y, self.winW, contH, self.player)
+    local ovPanel = BastionOverviewPanel:new(0, CONT_Y, self.winW, cH)
+    local stPanel = BastionSettlersPanel:new(0, CONT_Y, self.winW, cH)
+    local lgPanel = BastionLogTabPanel:new(0, CONT_Y, self.winW, cH)
+    local sPanel  = BastionSettingsPanel:new(0, CONT_Y, self.winW, cH, self.player)
 
     ovPanel:initialise()
     stPanel:initialise()
@@ -543,25 +590,22 @@ function BastionWindow:createChildren()
     self.settingsPanel = sPanel
 end
 
--- ── Layout update (called after resize) ──────────────────────────────────────
+-- ── Layout update after resize ────────────────────────────────────────────────
 
 function BastionWindow:updateLayout()
-    local contH = self.winH - CONT_Y
+    local cH = contentH(self.winH)
     self:setWidth(self.winW)
     self:setHeight(self.winH)
-
-    if self.closeBtn then
-        self.closeBtn:setX(self.winW - 26)
-    end
+    if self.closeBtn      then self.closeBtn:setX(self.winW - 26)            end
     if self.overviewPanel then
         self.overviewPanel:setWidth(self.winW)
-        self.overviewPanel:setHeight(contH)
+        self.overviewPanel:setHeight(cH)
     end
-    if self.settlersPanel then self.settlersPanel:doResize(self.winW, contH) end
-    if self.logPanel      then self.logPanel:doResize(self.winW, contH)      end
+    if self.settlersPanel then self.settlersPanel:doResize(self.winW, cH) end
+    if self.logPanel      then self.logPanel:doResize(self.winW, cH)      end
     if self.settingsPanel then
         self.settingsPanel:setWidth(self.winW)
-        self.settingsPanel:setHeight(contH)
+        self.settingsPanel:setHeight(cH)
     end
 end
 
@@ -595,68 +639,62 @@ function BastionWindow:prerender()
 
     -- Title bar
     self:drawRect(0, 0, self.winW, TITLE_H, 0.95, 0.10, 0.08, 0.15)
-    self:drawText("Bastion", 10, 7, 0.8, 0.65, 1.0, 1.0, UIFont.Medium)
+    self:drawText("Bastion", 10, 10, 0.8, 0.65, 1.0, 1.0, UIFont.Medium)
 
-    -- Tab bar background
+    -- Tab bar
     self:drawRect(0, TITLE_H, self.winW, TAB_H, 0.95, 0.07, 0.06, 0.20)
-
-    -- Tab buttons
     for i, name in ipairs(TABS) do
-        local tx      = (i - 1) * tabW
+        local tx       = (i - 1) * tabW
         local isActive = (self.currentTab == name)
         if isActive then
             self:drawRect(tx, TITLE_H, tabW, TAB_H, 0.9, 0.22, 0.16, 0.38)
-            -- Top highlight line on active tab
-            self:drawRect(tx, TITLE_H, tabW, 2, 0.9, 0.6, 0.9, 0.8)
+            self:drawRect(tx, TITLE_H, tabW, 2,     0.9, 0.6,  0.9,  0.8)
         else
             self:drawRect(tx, TITLE_H, tabW, TAB_H, 0.9, 0.10, 0.08, 0.18)
         end
-        -- Separator between tabs
         if i > 1 then
             self:drawRect(tx, TITLE_H + 4, 1, TAB_H - 8, 0.8, 0.4, 0.3, 0.5)
         end
         local tr = isActive and 1.0 or 0.70
         local tg = isActive and 0.9 or 0.65
         local tb = isActive and 1.0 or 0.85
-        self:drawText(name, tx + 8, TITLE_H + 8, tr, tg, tb, 1.0, UIFont.Small)
+        -- Fit label to tab cell width
+        local label = fitText(UIFont.Small, name, tabW - 10)
+        self:drawText(label, tx + 6, TITLE_H + 8, tr, tg, tb, 1.0, UIFont.Small)
     end
 
-    -- Hairline below tab bar
+    -- Separator line
     self:drawRect(0, CONT_Y - 1, self.winW, 1, 0.9, 0.4, 0.3, 0.4)
 
-    -- Resize grip (bottom-right corner)
-    local gx = self.winW - GRIP
-    local gy = self.winH - GRIP
-    self:drawRect(gx,     gy,     GRIP, 1,    0.55, 0.45, 0.7, 0.6)
-    self:drawRect(gx,     gy + 4, GRIP, 1,    0.55, 0.45, 0.7, 0.6)
-    self:drawRect(gx,     gy + 8, GRIP, 1,    0.55, 0.45, 0.7, 0.6)
-    self:drawRect(gx + 4, gy,     1,    GRIP, 0.55, 0.45, 0.7, 0.6)
-    self:drawRect(gx + 8, gy,     1,    GRIP, 0.55, 0.45, 0.7, 0.6)
+    -- Resize grip dots (bottom-right, inside the GRIP strip)
+    local gx = self.winW - GRIP + 2
+    local gy = self.winH - GRIP + 2
+    for row = 0, 2 do
+        for col = 0, 2 do
+            self:drawRect(gx + col * 4, gy + row * 4, 2, 2, 0.55, 0.45, 0.7, 0.7)
+        end
+    end
 end
 
 -- ── Mouse handling ────────────────────────────────────────────────────────────
 
 function BastionWindow:onMouseDown(x, y)
-    -- Resize handle (bottom-right corner)
+    -- Resize grip (bottom-right GRIP×GRIP strip — content panels don't reach here)
     if x >= self.winW - GRIP and y >= self.winH - GRIP then
-        self.resizing       = true
+        self.resizing      = true
         self.resizeOriginMX = getMouseX()
         self.resizeOriginMY = getMouseY()
         self.resizeOriginW  = self.winW
         self.resizeOriginH  = self.winH
         return true
     end
-
     -- Tab bar
     if y >= TITLE_H and y < CONT_Y then
         local tabW = math.floor(self.winW / #TABS)
         local idx  = math.floor(x / tabW) + 1
-        if idx >= 1 and idx <= #TABS then
-            self:selectTab(TABS[idx])
-        end
+        if idx >= 1 and idx <= #TABS then self:selectTab(TABS[idx]) end
         return true
     end
-
     -- Title bar drag
     if y < TITLE_H then
         self.dragging   = true
@@ -705,8 +743,7 @@ function BastionWindow:update()
     end
 end
 
--- ── Close button callback ─────────────────────────────────────────────────────
-
+-- Close button callback: ISButton calls onclick(target), target = this window
 function BastionWindow:onClose()
     BastionWindow.close()
 end
@@ -721,13 +758,12 @@ function BastionWindow.open(player)
         BastionWindow._instance:populate()
         return
     end
-
     local sw = getCore():getScreenWidth()
     local sh = getCore():getScreenHeight()
-    local x  = math.floor((sw - DEF_W) / 2)
-    local y  = math.floor((sh - DEF_H) / 2)
-
-    local win = BastionWindow:new(x, y, player)
+    local win = BastionWindow:new(
+        math.floor((sw - DEF_W) / 2),
+        math.floor((sh - DEF_H) / 2),
+        player)
     win:initialise()
     win:addToUIManager()
     win:populate()
@@ -742,11 +778,8 @@ function BastionWindow.close()
 end
 
 function BastionWindow.toggle(player)
-    if BastionWindow._instance then
-        BastionWindow.close()
-    else
-        BastionWindow.open(player)
-    end
+    if BastionWindow._instance then BastionWindow.close()
+    else BastionWindow.open(player) end
 end
 
 print("[Bastion] Window done")

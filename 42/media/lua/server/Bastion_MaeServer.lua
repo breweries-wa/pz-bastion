@@ -173,31 +173,35 @@ end
 -- True if a water source exists within collectRadius tiles.
 -- Checks: open water terrain tiles (ponds/rivers) and rain-barrel sprites.
 local function hasWaterSource(rec)
+    -- NOTE: sq:isWater() throws a Java exception that escapes Kahlua pcall in B42.
+    -- Natural water terrain (ponds/rivers) detection deferred until correct B42 API
+    -- is identified (Open Question #26). Currently detects man-made water sources only.
     local cell = getCell()
     if not cell then return false end
 
     local r    = Bastion.getSetting(rec, "WaterCarrier", "collectRadius") or 50
-    local step = Bastion.WATER_SOURCE_SCAN_STEP   -- skip tiles for performance
+    local step = Bastion.WATER_SOURCE_SCAN_STEP
     local bx, by, bz = rec.bx, rec.by, rec.bz
 
     for x = bx - r, bx + r, step do
         for y = by - r, by + r, step do
             local sq = cell:getGridSquare(x, y, bz)
             if sq then
-                -- Water terrain (ponds, rivers)
-                local ok, isWater = pcall(function() return sq:isWater() end)
-                if ok and isWater then return true end
-
-                -- Rain-barrel objects
                 local objs = sq:getObjects()
-                for i = 0, objs:size() - 1 do
-                    local obj = objs:get(i)
-                    local ok2, spr = pcall(function() return obj:getSprite() end)
-                    if ok2 and spr then
-                        local ok3, n = pcall(function() return spr:getName() end)
-                        if ok3 and type(n) == "string" then
-                            local nl = n:lower()
-                            if nl:find("rain") or nl:find("barrel") then return true end
+                if objs then
+                    for i = 0, objs:size() - 1 do
+                        local obj = objs:get(i)
+                        if obj then
+                            local ok, spr = pcall(function() return obj:getSprite() end)
+                            if ok and spr then
+                                local ok2, n = pcall(function() return spr:getName() end)
+                                if ok2 and type(n) == "string" then
+                                    local nl = n:lower()
+                                    if nl:find("rain") or nl:find("barrel") or nl:find("well") then
+                                        return true
+                                    end
+                                end
+                            end
                         end
                     end
                 end

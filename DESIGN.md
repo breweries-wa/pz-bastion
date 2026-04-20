@@ -411,41 +411,130 @@ Predictable escalation: the player knows the horde is building and can prepare.
 
 ## 10. Communication & Feedback
 
-### 9.1 Settlement Log
+### 10.1 Design Principle
 
-The player's primary feedback channel. Running record of tick actions, arrivals, deaths, shortages, and events.
+Almost everything lives in one window. Status checks, log entries, settler roster, scores, and settings are all in the Bastion Window — a single tabbed panel that replaces the previous HUD overlay and scattered right-click menus. The right-click menu is kept deliberately thin; it exists only to open the window, not to replace it.
 
-- Accessible via panel (keybind TBD)
-- Chronological, most recent first
-- Color-coded: white (standard), yellow (warning/shortage), red (death/critical), green (milestone)
-- Persists across sessions in world ModData
+---
 
-### 9.2 HUD
+### 10.2 The Bastion Window
 
-Minimal persistent overlay:
-- Food: days remaining
-- Water: days remaining
-- Noise: current / budget
-- Threat level: none / probe / incursion / horde
-- Settler count
+A resizable, draggable tabbed panel. Built on `ISTabPanel` inside an `ISCollapsableWindow`. Opens whenever the player initiates contact with the bastion.
 
-### 9.3 Right-Click NPC Dialogue
+#### Tabs
 
-Any settler can be right-clicked for a one-liner tied to their mood, role, or current situation. This is ambient flavor, not a menu system.
+**Overview**
+The current state of the settlement at a glance. Community scores (Food, Water, Noise, Health, Defense, Storage, Happiness, Resolve, Education) with contributor breakdowns directly below each score — the same format described in Section 5.3. The player should never have to ask why a score is moving.
 
-> *"The crops look okay. Worried about the cold coming."*
-> *"We're low on bandages. Someone should make a run."*
-> *"I'm fine. Just tired."*
+```
+OVERVIEW
+────────────────────────────────────
+Food: 8 days  [OK]
+  + Rosa cooking (reduces waste)       +1 day
+  - 6 settlers consuming               -0.8/day
 
-Settlers are not quest-givers and do not deliver structured reports.
+Noise: 4 / 6  [OK]
+  + Woodcutter active                  +3
+  + General settlement activity        +1
+  - Quiet mode: gunshots restricted    -0
 
-### 9.4 Radio Check-In
+Resolve: 41  [~]
+  + Successful defense (3 days ago)    +6
+  - Marcus died                        -18
+```
 
-- Ham Radio at settlement + walkie-talkie on player = check-in while out
-- Returns summary: food, water, noise level, active threats, flagged settlers
-- Delivered by whoever is on radio duty (any settler, not a named role)
-- Critical events trigger emergency broadcasts
-- No signal if out of range
+**Settlers**
+Full roster of every current settler. Each row: name, role, mood indicator, skill level. Clicking a settler expands their profile inline — backstory seed, trait tag, current mood details, and days at the settlement. No separate screen; expand/collapse in the list.
+
+```
+SETTLERS  (6)
+────────────────────────────────────
+▶ Rosa Flores       Cook        ★★★  Content
+▼ Marcus Webb       Woodcutter  ★★   Struggling
+    Army Veteran from Muldraugh who watched their town fall.
+    Trait: Hard Worker
+    Mood: Struggling — hasn't been eating well. Day 14 here.
+  James Kim         Farmer      ★    Content
+  ...
+```
+
+**Log**
+The full settlement log. Chronological, newest first. Color-coded by entry type:
+
+| Color | Type |
+|-------|------|
+| White | Standard tick output |
+| Yellow | Warning / shortage |
+| Red | Death / critical event |
+| Green | Arrival / milestone |
+| Gray | Suppressed activity (noise budget) |
+
+Scrollable. Persists across sessions. Max 100 entries (oldest pruned).
+
+**Settings**
+All player-facing controls for settlement behavior:
+
+- **Noise Budget:** Silent / Quiet / Normal / Loud (tiered preset; see Section 9.2)
+- **Firearms:** Allow / Melee-only (Defenders)
+- **Noisy work hours:** Unrestricted / Daylight only
+- **Per-role suspend:** Toggle any specialist role on or off entirely
+- **Disband Bastion:** Confirmation button at the bottom of this tab. Requires a second click on "Confirm Disband." Removes all settlers, clears ModData, closes the window.
+
+Disband is intentionally buried here — it's a serious action that should require navigating to it, not something reachable from a stray right-click.
+
+---
+
+### 10.3 Right-Click Menu
+
+Kept minimal. The window is the interface; the right-click is just the entry point.
+
+**Anywhere inside the bastion (no bastion exists):**
+- `Establish Bastion` — creates the settlement, then immediately opens the Bastion Window.
+
+**Anywhere inside the bastion (bastion exists):**
+- `Check on Bastion` — opens the Bastion Window.
+
+**On a container inside the bastion:**
+- `Mark as Private` / `Mark as Shared` — toggles community/private ownership.
+
+**On a settler mannequin:**
+- One-liner dialogue (mood-appropriate ambient flavor). No submenu. No structured report.
+
+That's the full right-click surface. Collapse, noise budget, role management, and disband are all inside the window.
+
+---
+
+### 10.4 Radio Check-In
+
+When away from the settlement, the player can still open the Bastion Window remotely if either condition is met:
+
+- Player is carrying a **walkie-talkie with a working battery**, and the settlement has a **ham radio**
+- Player is standing at any **ham radio** (regardless of location)
+
+Right-click the walkie-talkie or ham radio → `Call Bastion`
+
+This opens the same Bastion Window. No separate UI. A brief flavor line appears at the top of the Overview tab to indicate it's a remote call:
+
+> *"Static, then a voice: 'Yeah, we're here. What do you need?'"*
+
+If the settlement has no ham radio, the option doesn't appear. If the player is out of range and has no walkie-talkie, the option doesn't appear. Range check uses tile distance (exact radio range simulation is unverified — see Section 2.2).
+
+**Critical events** can push an emergency notification to the player's screen even without them initiating a call — a one-line alert in the chat area:
+
+> `[Bastion] We're being overrun. Need you back here.`
+
+This is the only Bastion information that appears outside the window.
+
+---
+
+### 10.5 Minimal HUD (Optional / Reduced)
+
+With the Bastion Window consolidating all detailed information, the persistent HUD overlay is reduced to a single line or removed entirely. If kept, it shows only the most critical alerts:
+
+- Shortage warning (food < 3 days, water < 2 days)
+- Active threat level (incursion or horde only — probes handled silently)
+
+Normal operational data (exact food days, noise score, settler count) lives in the window, not the HUD. The player doesn't need to see the numbers constantly — they need to see them when they check in.
 
 ---
 
@@ -891,5 +980,5 @@ These are manual in-game tests. Each test has a precondition, numbered steps, an
 
 ---
 
-*Bastion Design Document v0.4 — Working Draft*
+*Bastion Design Document v0.7 — Working Draft*
 *Maintain this file in the repo root. Update alongside implementation.*

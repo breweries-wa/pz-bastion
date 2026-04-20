@@ -1,5 +1,5 @@
 # Bastion — Design Document
-> Project Zomboid Build 42 Mod | v1.1
+> Project Zomboid Build 42 Mod | v1.2
 
 ---
 
@@ -107,7 +107,7 @@ PZ's farming Lua API surface is unverified.  Fall back to: Farmer adds harvested
 In vanilla PZ, items inside a powered fridge spoil slower — that's Java-side.  Our category labels and PZ's spoilage logic are separate systems.
 
 **Reading speed modification.**
-Modifying how fast the player reads a skill book requires a client-side tick hook watching for an open book.  The Teacher role sets `teacherActive = true`; the client applies a reading time modifier when that flag is set and the player is inside the bastion.  Exact API for reading state is unverified — see Open Question #20.
+Modifying how fast the player reads a skill book requires a client-side tick hook watching for an open book.  While an active Teacher is in the settlement, a reading time modifier applies when the player is inside the bastion radius.  Exact API for reading state is unverified — see Open Question #20.
 
 ### 2.3 Feasible but With Known Risks
 
@@ -122,11 +122,11 @@ Scanning 50-tile radius for water sources at every tick would be expensive.  Cac
 
 ### 2.4 Kahlua-Specific Gotchas
 
-- **No `goto` / `::label::`** — Lua 5.1 only.  Use `if instanceof` blocks instead of `continue`.
-- **Java exceptions escape `pcall`** — `item:getNutrition():getCalories()` can throw a Java `RuntimeException` that `pcall` cannot catch.  All Java-backed calls go through `pcall` chains; fallback flat estimates used where exceptions are known to occur.
+- **No `goto` / `::label::`** — Lua 5.1 only.
+- **Java exceptions escape `pcall`** — any call through a Java-backed object can throw a `RuntimeException` that `pcall` cannot catch.  Do not treat `pcall` as a safety net for Java method calls.  Avoid methods known to throw; use Lua-side checks (sprite name comparisons, nil guards) instead.
 - **`math.random` is nil** — use `ZombRand(n)` instead.  Returns 0 to n-1.
-- **`Events.OnModDataTransmit` does not exist in B42** — removed; panels repopulate on open.
 - **`table.unpack` is nil** — use `unpack` (Lua 5.1 global).
+- **No reliable cross-client data sync event** — panels repopulate their display data on open rather than subscribing to a server broadcast.
 
 ### 2.5 The Consequence for Design Language
 
@@ -144,7 +144,7 @@ The boundary is a **fixed tile radius from the bastion anchor square** (the tile
 
 > ⚑ OPEN: Exact growth formula not yet defined.  Starting radius, step size per additional settler, and maximum radius to be tuned during Phase 3 playtesting.  See Open Question #27.
 
-Player-built extensions (walls, floors, roofed areas attached to the main building) fall inside the radius automatically because the radius is geometric, not room-based.  `sq:getRoom()` is explicitly **not** used for boundary decisions — see Section 2.4.
+Player-built extensions (walls, floors, roofed areas attached to the main building) fall inside the radius automatically.  The boundary is purely geometric — room type is not used for inclusion decisions, which means player-constructed additions count from the start.
 
 The safehouse property system is no longer the primary boundary mechanism.  The radius is the boundary.
 
@@ -165,13 +165,7 @@ Both elements activate together and deactivate together when the window opens/cl
 
 > ⚑ OPEN: PZ's `WorldToScreen` API for rendering tile-space overlays and floating labels needs verification.  The exact draw hook (likely `Events.OnPostRenderFloor` or similar) is unconfirmed.  See Open Question #28.
 
-**Implementation approach:**
-- Client-side only; no server communication
-- On window open: build a tile list from anchor + radius, categorize each tile, store in `BastionWindow.overlayTiles`
-- Each render tick: walk `overlayTiles` and draw colored quads / floating strings
-- On window close: clear `overlayTiles`
-
-The overlay is rebuilt whenever the window is opened (not cached between sessions) to pick up any world changes since last open.
+The visualization is client-side only — no server communication is needed, since the client already knows the anchor square and radius.  The tile list is rebuilt each time the window opens so it reflects any world changes since last viewed.
 
 ---
 
@@ -206,7 +200,7 @@ Marcus — thread stock is at cap (50). No rags consumed.
 
 ### 4.3 Tick Frequency
 
-Once per in-game day.  The check runs on `Events.EveryOneMinute`; the tick fires only if the current in-game day is greater than `rec.lastTickDay`.
+Once per in-game day.  The last tick date is persisted in the settlement record so reloading mid-day does not cause a double-fire.
 
 ---
 
@@ -278,7 +272,7 @@ Skill levels improve over time — settlers learn by doing.  (Advancement rate: 
 
 ### 6.3 Per-Role Settings
 
-Each role has a settings record in `rec.roleSettings[roleName]` — a table of named parameters initialized from `Bastion.ROLE_SETTINGS_DEFAULTS`.  These are changed via the `SetRoleSetting` client command (and eventually via a Settings tab UI in a later phase).
+Each role has a named set of settings defining its resource floors and caps.  Settings default to sensible values on establishment and can be changed via admin command or (Phase 3) the Settings tab UI.
 
 **Resource floor principle:** every role that consumes a limited resource has at least one setting that defines a floor or cap.  The settler **stops** when the cap is reached and logs clearly that it has.  It never silently consumes toward zero.
 
@@ -369,7 +363,7 @@ Work sites are physical objects required for certain roles to operate at full ef
 | Role | Requires | Fallback (no site) |
 |------|----------|--------------------|
 | Cook | Stove, oven, or campfire | 50% meal output |
-| Doctor | Heat source (stove, campfire) | Already gated by `hasHeatSource` — may overlap |
+| Doctor | Heat source (stove, campfire) | Overlaps with existing heat source infrastructure check — may be consolidated |
 | Blacksmith | Forge or metalworking station | 50% ingot output |
 | Teacher | Chalkboard within radius | Role inactive entirely (chalkboard is prerequisite, not a productivity modifier) |
 | Woodcutter | Sawmill or workbench | No penalty — splitting logs needs no appliance |
@@ -425,30 +419,26 @@ All containers within the settlement boundary are **community storage by default
 | **Refrigerated** | Fridges, coolers | Label only; actual PZ spoilage is Java-side |
 | **Frozen** | Freezers | Label only |
 
-The scanner walks all objects in the indoor squares within `SCAN_RANGE` tiles of the bastion anchor square.
+The scanner walks all objects within the bastion radius of the anchor square.
 
 ### 8.2 Settler Water Pool
 
-Settlers manage their own water supply independent of the player's containers.  This is tracked in `rec.settlerWaterPool` — measured in settler-days of safe water.
+Settlers manage their own water supply independent of the player's containers.  The pool is measured in settler-days of safe drinking water.
 
 **How the pool works:**
-- WaterCarrier role adds to the pool (requires: water source within `collectRadius`, heat source in bastion, pot in shared storage)
-- Roles that need water (Doctor, Farmer, Tailor) call `debitWater()` — if the pool is empty, their water-requiring step is skipped with a warning log
-- The pool is capped at `WATER_POOL_MAX` (21 days — a 3-week hard cap)
+- WaterCarrier role adds to the pool each tick (requires: water source within scan radius, heat source in bastion, pot in shared storage)
+- Roles that need water (Doctor, Farmer, Tailor) draw from the pool — if it is empty, their water-requiring step is skipped with a warning log
+- The pool is capped at 21 days (a 3-week hard ceiling)
 - The pool is **separate from player containers** — settler roles never touch the water in the player's barrels or bottles
-- `rec.waterDays` displayed in the Overview = actual container water + settler pool
+- Water displayed in the Overview = actual container water + settler pool combined
 
-**World-state cache:**  Whether a water source and heat source exist is expensive to scan every day.  Results are cached in `rec.cachedWaterSource` and `rec.cachedHeatSource` and refreshed every 7 in-game days.  Infrastructure status is shown in the Overview tab so the player can see why WaterCarrier isn't working.
+**World-state cache:**  Scanning for water sources and heat sources on every tick would be expensive.  Results are cached and refreshed every 7 in-game days.  Infrastructure status is shown in the Overview tab so the player can see why the WaterCarrier isn't working.
 
-**WaterCarrier yield formula:**
-```
-produced = WATER_PER_CARRIER_TICK + (settler.skillLevel - 1) * WATER_CARRIER_SKILL_MOD
-         = 2.0 + (skillLevel - 1) * 0.3   settler-days per tick
-```
+**WaterCarrier output per tick:** 2.0 + (skill level − 1) × 0.3 settler-days
 
 ### 8.3 Virtual Yield System
 
-Settlers produce output that is tracked in `rec.virtualYield` — a key/value table accumulating pending production.  This is a Phase 2 tracking system; physical item spawning is Phase 3.
+Settlers produce output that accumulates as **pending production** until the player claims it.  This is a Phase 2 tracking system; physical item spawning is Phase 3.
 
 **Current virtual yield keys:**
 
@@ -466,7 +456,7 @@ Settlers produce output that is tracked in `rec.virtualYield` — a key/value ta
 | `milk` | Milk units | Rancher |
 | `savedSeeds` | Seeds reserved for replanting | Farmer |
 
-All yield entries are capped by the role's `max*` setting.  Once a cap is reached, the settler logs "stock at cap" and stops consuming the input resource.
+All yield entries are capped by the role's configured cap setting.  Once a cap is reached, the settler logs "stock at cap" and stops consuming the input resource.
 
 **Phase 3: Claiming yield** — a "Collect Production" action in the Bastion Window will spawn the accumulated virtual yield as actual items into a designated output container in the settlement.  The exact item type strings and container targeting logic are deferred to Phase 3 design.
 
@@ -480,12 +470,12 @@ The Cook specialist will be aware of appliance locations (stoves, ovens) within 
 
 - Right-click any container inside the settlement → "Mark as Private" / "Mark as Shared"
 - Private containers are invisible to the simulation; specialists never draw from them
-- Persists across sessions via `rec.privateContainers[objKey] = true`
+- Private/shared state persists across sessions
 
 ### 8.6 Food Management
 
-- Cook uses perishable food first (items with a positive `AgeDelta` or "fresh"/"raw" in type name)
-- `allowDryGoods = false` protects shelf-stable reserves by default
+- Cook uses perishable food first (fresh and raw items before shelf-stable)
+- Dry goods are excluded by default; the setting can be unlocked to allow them
 - Food projection shown in Bastion Window Overview tab
 
 ---
@@ -525,7 +515,7 @@ When the noise score exceeds the player's set budget, the settlement tick suppre
 - **Firearms toggle:** Allow / Melee-only (Phase 4)
 - **Noisy work hours:** Unrestricted / Daylight only (Phase 4)
 - **Per-role suspend:** Pause any specialist entirely (Phase 4)
-- **Per-role settings:** `maxThread`, `allowDryGoods`, `scrapFloor`, etc. (Phase 3 UI; currently via admin command)
+- **Per-role settings:** caps and floors per role (Phase 3 UI; currently via admin command)
 
 ### 9.3 Ambient Sounds (Phase 4)
 
@@ -549,13 +539,7 @@ Everything lives in one window.  Status checks, log entries, settler roster, sco
 
 ### 10.2 The Bastion Window
 
-A draggable tabbed panel.  Built on `ISTabPanel` inside a custom `ISPanel` with title-bar drag handling.  Auto-refreshes every ~5 seconds while open.
-
-**Implementation notes:**
-- `BastionWindow` extends `ISPanel` with manual drag via `onMouseDown`/`update()` and `getMouseX()`/`getMouseY()`
-- `ISTabPanel:addView(name, panel)` positions each content panel at `y = tabHeight` automatically
-- Content panel height = `WIN_H - TITLE_H - TAB_H = 376px`
-- Close button uses colon-syntax ISButton callback where `self = target = the window`
+A resizable, draggable tabbed panel.  Auto-refreshes every ~5 seconds while open.
 
 #### Tabs
 
@@ -735,19 +719,18 @@ Borrow: Workers exist and matter narratively, but you rarely see individuals.
 
 **Goal:** Prove the core loop works end-to-end.
 
-- [x] Settlement boundary (SCAN_RANGE tile radius from anchor square)
-- [x] Settler spawning: IsoMannequin placed at establish, removed at collapse, persists across sessions
+- [x] Settlement boundary: tile radius from anchor square
+- [x] Settler spawning: mannequin placed at establish, removed at collapse, persists across sessions
 - [x] NPC generation: name, role, skill level, trait tag, backstory seed
 - [x] Community storage: opt-out container system, item registry (general / refrigerated / frozen)
-- [x] Settlement tick: once-per-day via `EveryOneMinute`, `lastTickDay` guard
-- [x] **Bastion Window** (ISTabPanel): Overview, Settlers, Log, Settings tabs
+- [x] Settlement tick: once per in-game day, guarded against double-fire on reload
+- [x] **Bastion Window**: Overview, Settlers, Log, Settings tabs; draggable and resizable
 - [x] Food and water tracking displayed in Overview
 - [x] Noise score with player budget control (Silent / Quiet / Normal / Loud) via Settings tab
 - [x] Admin chat commands (`/bastion help/status/tick/reset/addlog`)
 - [x] Right-click: Establish Bastion (opens window) / Check on Bastion
 - [x] Container mark-private / mark-shared via right-click
 - [x] ModData persistence across save/load
-- [x] Kahlua compatibility: no goto, no Java exception in nutrition chain, no OnModDataTransmit
 
 ---
 
@@ -757,42 +740,42 @@ Borrow: Workers exist and matter narratively, but you rarely see individuals.
 
 #### Implemented ✅
 
-- [x] **Settler water pool** (`rec.settlerWaterPool`): separate from player containers, capped at 21 days
+- [x] **Settler water pool**: separate from player containers, capped at 21 days
 - [x] **WaterCarrier role**: collect + boil water; requires water source + heat source + pot; skill-scaled yield
-- [x] **Per-role settings** (`rec.roleSettings` initialized from `ROLE_SETTINGS_DEFAULTS`; `Bastion.getSetting()` helper)
-- [x] **Virtual yield system** (`rec.virtualYield`; `Bastion.addVirtualYield()` with cap)
-- [x] **`SetRoleSetting` client command** (validated against known keys)
-- [x] **World-state cache**: `hasWaterSource`, `hasHeatSource`, `hasAnimals` scan on establish and every 7 days; shown in Overview
+- [x] **Per-role settings**: named caps and floors per role, adjustable via admin command
+- [x] **Virtual yield tracking**: pending output per role accumulates until claimed; shown in Overview
+- [x] **Role settings admin command**: server-side validation of role name and setting key
+- [x] **World-state cache**: water source, heat source, and animal presence scanned on establish and every 7 days; shown in Overview
 - [x] **Resource-floor-aware role ticks:**
-  - Tailor: washes dirty rags (water pool), picks thread up to `maxThread` cap
-  - Doctor: sterilizes bandages up to `maxBandages`; prorates batch when water is short; requires heat source
-  - Cook: perishables-first ordering; respects `allowDryGoods = false`; auto-sizes meals to settler count + 1
-  - Farmer: costs 1 water-day; saves seed fraction before reporting
-  - Woodcutter: respects `maxPlanks`; secondary fire-stoking if `keepFiresLit`
-  - Fisher: requires bait + fishing line from storage; respects `maxFishStock`
-  - Blacksmith: scrap → ingots; never touches `scrapFloor` reserve; requires heat source; skill-gated throughput
-  - Rancher: detects `IsoAnimal`; grain floor prevents feed depletion; produces eggs/milk yield
-  - Mechanic: generator refueling (skill 1) + vehicle parts check (skill 3)
+  - Tailor: washes dirty rags (draws from settler water pool), picks thread up to cap
+  - Doctor: sterilizes bandages up to cap; prorates batch when water is short; requires heat source
+  - Cook: perishables-first ordering; dry goods excluded by default; auto-sizes meals to settler count + 1
+  - Farmer: costs 1 water-day per tick; saves seed fraction before reporting yield
+  - Woodcutter: respects plank cap; secondary fire-stoking when enabled
+  - Fisher: requires bait + fishing line from storage; respects fish stock cap
+  - Blacksmith: scrap → ingots; never touches the scrap floor reserve; requires heat source; skill-gated throughput
+  - Rancher: detects animals in radius; grain floor prevents feed depletion; produces eggs/milk yield
+  - Mechanic: generator refueling (lower skill) + vehicle parts check (higher skill)
   - Trapper: bait check before reporting catch (abstract yield for now)
 - [x] Overview tab: water pool breakdown, infrastructure flags, virtual yield display
 
 #### Remaining Phase 2 Work 📋
 
-- [ ] **Role settings UI** in Settings tab: editable fields for `maxThread`, `allowDryGoods`, `scrapFloor`, etc.  Currently only settable via admin command.
-- [ ] **Teacher reading speed multiplier**: client-side `Events.OnTick` hook; modify book reading timer when `rec.teacherActive = true` and player is inside bastion.  Exact API unverified — see Open Question #20.
-- [ ] **Trapper trap scanning**: scan for actual `IsoTrap` objects in a ring *outside* the bastion radius.  Distance affects tick cost.  Phase 2 design below.
+- [ ] **Role settings UI** in Settings tab: editable fields for caps and floors per role.  Currently only settable via admin command.
+- [ ] **Teacher reading speed multiplier**: client-side hook; applies a reading time modifier when an active Teacher is in the settlement and the player is inside the bastion.  API unverified — see Open Question #20.
+- [ ] **Trapper trap scanning**: scan for placed traps in a ring *outside* the bastion radius.  Distance affects tick cost.  Design below.
 - [ ] **Phase 2 test plan execution** (see Section 15.2)
 
 #### Trapper Trap Scanning Design
 
 Traps must be placed **outside** the bastion's indoor zone to work (you don't trap your own living space).
 
-- Scan for `IsoTrap` objects in a ring from `min(15 tiles)` to `trapRadius (60)` from anchor square
-- Each trap within range is "checked" — roll yield based on settler skill + trap type
-- Traps beyond 40 tiles cost 2 action points; settler has a daily pool of `4 + skillLevel` action points
+- Scan for placed traps in a ring from a minimum of 15 tiles to the trap scan radius (default 60) from the anchor square
+- Each trap within range is "checked" — yield rolled based on settler skill + trap type
+- Traps beyond 40 tiles cost 2 action points; settler has a daily action pool of 4 + skill level
 - Unchecked traps are noted in the log
 - Rebaiting: consume worms/berries/corn from shared storage per reset trap
-- Result goes to `rec.virtualYield.meat`
+- Catch adds to the meat yield pending pool
 
 ---
 
@@ -1035,7 +1018,7 @@ Run after Phase 1 tests pass.  Requires: bastion established, at least one settl
 **T8.3 — WaterCarrier fills the pool when conditions met**
 - *Pre:* All three conditions met (water source + heat source + pot).
 - *Steps:* Assign WaterCarrier, advance day.
-- *Pass:* `rec.settlerWaterPool` increases by ~2.0 + skill bonus.  Log confirms with "pool" numbers.
+- *Pass:* Settler water pool increases by ~2.0 + skill bonus.  Log confirms with "pool" numbers.
 
 **T8.4 — Pool shown in Overview with breakdown**
 - *Pre:* T8.3 passed.  Pool > 0.
@@ -1085,7 +1068,7 @@ Run after Phase 1 tests pass.  Requires: bastion established, at least one settl
 
 **T9.6 — Farmer saves seeds by default**
 - *Steps:* Advance day with Farmer assigned.
-- *Pass:* Log mentions seeds set aside.  `rec.virtualYield.savedSeeds` > 0.
+- *Pass:* Log mentions seeds set aside.  Saved seeds appear in pending production.
 
 **T9.7 — Blacksmith does not touch scrapFloor reserve**
 - *Pre:* Storage has exactly `scrapFloor` (10) scrap items.  `scrapFloor = 10`.
@@ -1130,11 +1113,11 @@ Run after Phase 1 tests pass.  Requires: bastion established, at least one settl
 
 **T11.2 — Invalid key rejected**
 - *Steps:* Send `SetRoleSetting` with `key="notakey"`.
-- *Pass:* Server logs rejection.  `rec.roleSettings` unchanged.
+- *Pass:* Server logs rejection.  Role settings unchanged.
 
 **T11.3 — Settings persist across save/load**
-- *Steps:* Set `maxThread = 25`, save, load.
-- *Pass:* `rec.roleSettings.Tailor.maxThread = 25` after reload.
+- *Steps:* Set Tailor thread cap to 25, save, load.
+- *Pass:* Tailor thread cap is still 25 after reload.
 
 ---
 
@@ -1175,5 +1158,5 @@ Run after Phase 1 tests pass.  Requires: bastion established, at least one settl
 
 ---
 
-*Bastion Design Document v1.1*
+*Bastion Design Document v1.2*
 *Design before code.  Tests before implementation.  Update this file whenever a decision changes.*

@@ -171,11 +171,11 @@ Slower to move. Reflect the emotional and social state of the settlement.
 
 ### 4.3 Score Contributor UI
 
-Each score panel shows every active contributor with its value. The player should never guess why a score is moving.
+Every score in the Bastion Window's Overview tab lists every active contributor directly below it. The player should never guess why a score is moving.
 
 ```
-COMMUNITY STATUS
-----------------
+OVERVIEW — COMMUNITY STATUS
+────────────────────────────
 Food: 8 days  [OK]
   + Rosa cooking (reduces waste)       +1 day
   - 6 settlers consuming               -0.8/day
@@ -197,7 +197,7 @@ Resolve: 41  [~]
 
 ### 5.1 Design Principle
 
-Settlers exist in the settlement and in the log. The player learns who they are through tick reports and observation, not a roster screen. There is no settler management UI.
+Settlers exist in the settlement and in the log. The player learns who they are through tick reports, observation, and the Settlers tab in the Bastion Window — a roster that shows name, role, mood, and skill level, with an expandable profile per settler. The roster is read-only from the player's perspective; settler management (adding, removing, editing roles) is an admin-only function accessed via chat commands or the debug panel.
 
 ### 5.2 Skill-Based Roles
 
@@ -332,7 +332,7 @@ This creates emergent organization. The player doesn't need to manually sort the
 ### 7.4 Food Management
 
 - **Spoilage priority toggle:** Cook uses nearly-spoiled food first
-- **Food projection:** HUD shows days remaining at current consumption
+- **Food projection:** Bastion Window Overview tab shows days remaining at current consumption
 - **Balanced diet:** Cook attempts variety; monotonous diet incurs Happiness penalty
 
 ### 7.5 Water
@@ -340,7 +340,7 @@ This creates emergent organization. The player doesn't need to manually sort the
 - Rain barrels as primary collection
 - Consumption tracked per tick
 - Shortage: Cook and Doctor lose effectiveness
-- HUD metric alongside food projection
+- Days remaining shown in Bastion Window Overview tab alongside food projection
 
 ---
 
@@ -368,12 +368,12 @@ When the noise score exceeds the player's set budget, the settlement tick suppre
 
 The player can configure what the settlement is and isn't allowed to do:
 
-- **Noise budget:** A simple slider or tiered setting (Silent / Quiet / Normal / Loud). Constrains which specialist activities run on a given tick.
+- **Noise budget:** Tiered preset (Silent / Quiet / Normal / Loud). Constrains which specialist activities run on a given tick.
 - **Firearms toggle:** Allow or prohibit Defenders from using guns. Melee-only mode reduces noise significantly at the cost of Defender effectiveness.
 - **Time restrictions:** Noisy work (chopping, smithing) restricted to daylight hours only.
 - **Individual role suspend:** Pause any specialist role entirely.
 
-These settings persist and are adjustable at any time. They are not "quests" or "upgrades" — they're configuration.
+All of these controls live in the **Settings tab** of the Bastion Window. They persist and are adjustable at any time. They are not "quests" or "upgrades" — they're configuration.
 
 ### 8.3 Ambient Sounds
 
@@ -383,7 +383,7 @@ This creates the illusion of an active community without requiring visible NPCs 
 
 The sounds also reinforce the noise score — the player can literally hear when the settlement is being loud.
 
-> See Section 10 for the open question about NPC physical representation and why ambient sound is load-bearing.
+> See Section 12 for the open question about NPC physical representation and why ambient sound is load-bearing.
 
 ### 8.4 Zombie Attraction
 
@@ -712,7 +712,7 @@ The settlement log and ambient sounds carry the simulation. Physical presence is
 
 ## 14. Implementation Phases
 
-> **Current status:** Proof of concept. Right-click context menu works, Establish/Collapse Bastion sends server commands, a mannequin spawns. No game systems implemented yet.
+> **Current status:** Proof of concept. Right-click context menu works, Establish Bastion sends server commands, a mannequin spawns, and a basic log panel and HUD overlay exist. Phase 1 is being reworked to replace the HUD overlay and standalone log panel with the unified Bastion Window.
 
 ### Phase 1 — Foundation
 - Settlement boundary (safehouse property integration + validation)
@@ -721,20 +721,22 @@ The settlement log and ambient sounds carry the simulation. Physical presence is
 - Community storage: opt-out container system, item registry
 - Storage categories: general, refrigerated, frozen
 - Settlement tick: once-per-day cycle, basic log output
-- Settlement log panel UI
-- Food and water tracking with HUD display
-- Noise score tracking with player budget control
+- **Bastion Window** (tabbed): Overview tab with scores, Log tab, Settlers tab, Settings tab
+- Food and water tracking displayed in Overview tab
+- Noise score tracking with player budget control via Settings tab
+- Admin chat commands (`/bastion` prefix, host/admin gated)
 
 ### Phase 2 — First Specialists
 - Cook: warm meal production, kitchen awareness, Happiness score
 - Woodcutter: log/plank production, fuel reserve, noise output
 - Farmer: crop tending, harvest, seasonal behavior
 - Trapper and Fisher: passive food supplementation
-- Settler mood states
+- Settler mood states (reflected in Settlers tab)
 - Arrival log entries with backstory seeds
-- Radio check-in
+- Radio check-in (walkie-talkie + ham radio opens Bastion Window remotely)
 - Resolve score
 - Ambient sounds: chopping, cooking activity
+- Debug panel (developer-only, `isDebugEnabled()` gated)
 
 ### Phase 3 — Community Depth
 - Doctor, Teacher, Tailor, Forager, Mechanic specialists
@@ -749,7 +751,7 @@ The settlement log and ambient sounds carry the simulation. Physical presence is
 - Defender, Scout, Soldier, Hunter specialists
 - Zombie attraction scaling
 - Threat event tiers with ambient sound cues
-- Firearms toggle and time-restriction controls
+- Firearms toggle and time-restriction controls (Settings tab)
 - Blacksmith (Education-gated, B42 smithing integration)
 - Carpenter, Electrician, Welder specialists
 - Self-sufficiency milestone tracking
@@ -778,14 +780,15 @@ These are manual in-game tests. Each test has a precondition, numbered steps, an
 - *Precondition:* T1.1 passed. A bastion exists.
 - Steps:
   1. Right-click inside a different building.
-- *Pass:* "Establish Bastion" does not appear. Only "Collapse Bastion" is available (if inside the bastion building).
+- *Pass:* "Establish Bastion" does not appear. "Check on Bastion" appears if inside the bastion building.
 
-**T1.3 — Collapse Bastion removes it**
+**T1.3 — Disband Bastion removes it**
 - *Precondition:* T1.1 passed. Player is inside their bastion.
 - Steps:
-  1. Right-click inside the bastion.
-  2. Select "Collapse Bastion."
-  3. Right-click inside the same building again.
+  1. Right-click inside the bastion → "Check on Bastion."
+  2. Navigate to the Settings tab.
+  3. Click "Disband Bastion," then confirm.
+  4. Right-click inside the same building again.
 - *Pass:* "Establish Bastion" reappears. World ModData for this player is cleared.
 
 **T1.4 — Bastion persists across save and load**
@@ -794,7 +797,7 @@ These are manual in-game tests. Each test has a precondition, numbered steps, an
   1. Save and quit.
   2. Load the same save.
   3. Right-click inside the bastion building.
-- *Pass:* "Collapse Bastion" appears (not "Establish Bastion"). The bastion record survived the reload.
+- *Pass:* "Check on Bastion" appears (not "Establish Bastion"). The bastion record survived the reload.
 
 ---
 
@@ -855,14 +858,13 @@ These are manual in-game tests. Each test has a precondition, numbered steps, an
 **T4.1 — Generated settler has a name**
 - *Precondition:* T3.1 passed.
 - Steps:
-  1. Right-click the settler.
-  2. Check the settlement log arrival entry.
+  1. Open Bastion Window → Settlers tab, or check the Log tab arrival entry.
 - *Pass:* A first and last name is shown. It is not "nil," blank, or a placeholder.
 
 **T4.2 — Generated settler has a role**
 - *Precondition:* T4.1 passed.
 - Steps:
-  1. Check the settler's role in the arrival log or right-click info.
+  1. Check the settler's role in the Settlers tab or the arrival log entry.
 - *Pass:* A role name is assigned (e.g., "Cook," "Woodcutter," "Farmer"). Not blank.
 
 **T4.3 — Generated settler has a trait tag**
@@ -912,14 +914,14 @@ These are manual in-game tests. Each test has a precondition, numbered steps, an
 - *Precondition:* A fridge exists inside the settlement boundary.
 - Steps:
   1. Put food in the fridge.
-  2. Check the Community Status panel.
+  2. Open Bastion Window → Overview tab.
 - *Pass:* Refrigerated storage shows a non-zero item count or weight distinct from general storage.
 
 **T5.5 — Frozen containers tracked separately**
 - *Precondition:* A freezer exists inside the settlement boundary.
 - Steps:
   1. Put food in the freezer.
-  2. Check the Community Status panel.
+  2. Open Bastion Window → Overview tab.
 - *Pass:* Frozen storage shows a non-zero value distinct from refrigerated and general.
 
 **T5.6 — Storage capacity warning when full**
@@ -965,62 +967,74 @@ These are manual in-game tests. Each test has a precondition, numbered steps, an
 
 ---
 
-### Group 7 — Settlement Log UI
+### Group 7 — Bastion Window & Log Tab
 
-**T7.1 — Log panel opens**
+**T7.1 — Bastion Window opens**
 - *Precondition:* Bastion established.
 - Steps:
-  1. Open the settlement log (keybind or menu TBD).
-- *Pass:* A panel opens without error. At minimum, the arrival log entry from T4.4 is visible.
+  1. Right-click inside the bastion → "Check on Bastion."
+- *Pass:* The Bastion Window opens without error. All four tabs are visible (Overview, Settlers, Log, Settings).
 
-**T7.2 — Log is chronological, newest first**
+**T7.2 — Log tab shows entries, newest first**
 - *Precondition:* At least two days of tick entries exist.
 - Steps:
-  1. Open the log.
+  1. Open Bastion Window → Log tab.
 - *Pass:* The most recent day's entries appear at the top. Older entries are below.
 
 **T7.3 — Log persists across save and load**
-- *Precondition:* T7.1 passed. Several log entries exist.
+- *Precondition:* T7.2 passed. Several log entries exist.
 - Steps:
   1. Save and quit.
   2. Load the save.
-  3. Open the log.
+  3. Open Bastion Window → Log tab.
 - *Pass:* All prior log entries are still present. Nothing lost on reload.
 
 **T7.4 — Log color-coding is correct**
 - *Precondition:* Log contains at least one standard entry, one shortage/warning, and one arrival.
 - Steps:
-  1. Open the log.
-- *Pass:* Standard tick entries are white. Shortage/warning entries are yellow. Arrival entries are a distinct color (green or other).
+  1. Open Bastion Window → Log tab.
+- *Pass:* Standard tick entries are white. Shortage/warning entries are yellow. Arrival entries are green. Suppressed activity entries are gray.
+
+**T7.5 — Settlers tab shows roster**
+- *Precondition:* At least one settler exists.
+- Steps:
+  1. Open Bastion Window → Settlers tab.
+- *Pass:* Each settler appears as a row with name, role, mood indicator, and skill level. Clicking a row expands their profile inline.
+
+**T7.6 — Settings tab contains activity controls**
+- *Precondition:* Bastion established.
+- Steps:
+  1. Open Bastion Window → Settings tab.
+- *Pass:* Noise budget options, firearms toggle, time restriction, and per-role suspend controls are all present. Disband button is present at the bottom.
 
 ---
 
-### Group 8 — Food & Water HUD
+### Group 8 — Food & Water (Overview Tab)
 
 **T8.1 — Food days remaining is displayed**
 - *Precondition:* Community storage contains food. At least one settler is consuming food.
 - Steps:
-  1. Check the HUD.
-- *Pass:* A "Food: X days" metric is visible and shows a positive number.
+  1. Open Bastion Window → Overview tab.
+- *Pass:* A "Food: X days" metric is visible with a positive number and contributor breakdown below it.
 
 **T8.2 — Water days remaining is displayed**
 - *Precondition:* Community storage contains water or a rain barrel is in the settlement.
 - Steps:
-  1. Check the HUD.
+  1. Open Bastion Window → Overview tab.
 - *Pass:* A "Water: X days" metric is visible.
 
 **T8.3 — Values update after a tick**
 - *Precondition:* T8.1 and T8.2 passed. Note current values.
 - Steps:
   1. Advance one in-game day.
-  2. Re-check HUD values.
+  2. Re-open Bastion Window → Overview tab.
 - *Pass:* Values have changed (decreased by approximately one day's consumption). Values do not stay static.
 
 **T8.4 — Shortage warning appears below threshold**
 - *Precondition:* Food supply is below 3 days' worth.
 - Steps:
-  1. Check the HUD and log.
-- *Pass:* HUD shows the food metric in a warning color (yellow or red). A log entry flags the shortage.
+  1. Open Bastion Window → Overview tab. Also check the on-screen alert area.
+- *Pass:* Food metric is shown in warning color (yellow or red) in the Overview tab. A brief critical alert appears on screen even without the window open. A log entry flags the shortage.
 
 ---
 
@@ -1029,8 +1043,8 @@ These are manual in-game tests. Each test has a precondition, numbered steps, an
 **T9.1 — Noise score is displayed**
 - *Precondition:* Bastion established.
 - Steps:
-  1. Check the HUD or Community Status panel.
-- *Pass:* A noise metric is visible (e.g., "Noise: 3 / 6").
+  1. Open Bastion Window → Overview tab.
+- *Pass:* A noise metric is visible (e.g., "Noise: 3 / 6") with contributor breakdown.
 
 **T9.2 — Active Woodcutter increases noise score**
 - *Precondition:* No specialists active. Note baseline noise. Assign a Woodcutter.
@@ -1040,18 +1054,18 @@ These are manual in-game tests. Each test has a precondition, numbered steps, an
 - *Pass:* Noise score is higher than baseline. Difference matches the Woodcutter's defined noise contribution.
 
 **T9.3 — Noise budget suppresses over-budget activities**
-- *Precondition:* Woodcutter is active. Set noise budget to "Silent."
+- *Precondition:* Woodcutter is active. Set noise budget to "Silent" via Bastion Window → Settings tab.
 - Steps:
   1. Advance one day.
-  2. Check the log.
-- *Pass:* Log contains an entry stating the Woodcutter's tick was skipped due to the noise budget. No logs or planks were added to storage.
+  2. Open Bastion Window → Log tab.
+- *Pass:* Log contains a gray entry stating the Woodcutter's tick was skipped due to the noise budget. No logs or planks were added to storage.
 
 **T9.4 — Removing noise budget restriction restores activity**
 - *Precondition:* T9.3 passed. Noise budget is still "Silent."
 - Steps:
-  1. Set noise budget back to "Normal."
+  1. Open Bastion Window → Settings tab. Set noise budget back to "Normal."
   2. Advance one day.
-- *Pass:* Woodcutter tick runs. Logs or planks are added to storage. No suppression message in log.
+- *Pass:* Woodcutter tick runs. Logs or planks are added to storage. No suppression entry in log.
 
 ---
 
@@ -1072,14 +1086,14 @@ These are manual in-game tests. Each test has a precondition, numbered steps, an
 | 11 | Backstory seed tables | TBD | Needs authored micro-tables |
 | 12 | Right-click settler dialogue — authored per tag or templated? | Open | Templated with tag substitution likely sufficient |
 | 13 | Subjective score set — are Happiness / Resolve / Education correct? | Open | Revisit after Phase 2 |
-| 14 | NPC representation long-term (mannequin / indoors / spokesperson / B42 NPC system) | Open | See Section 10; Option B+C recommended for now |
+| 14 | NPC representation long-term (mannequin / indoors / spokesperson / B42 NPC system) | Open | See Section 12; Option B+C recommended for now |
 | 15 | Bundled profession skill advancement — track each skill separately or per profession? | Open | Recommendation: separately |
 | 16 | Storage capacity units — weight-based or slot-based? | Open | Weight is more PZ-like but harder to display |
 | 17 | Item registry rebuild frequency — every tick or on demand? | Open | Every tick simplest; on-demand more performant |
 | 18 | Ambient sound events — trigger on tick, or simulate independently of tick? | Open | Tick-triggered simplest; independent would allow time-of-day variation |
-| 19 | Noise budget UI — slider, tiered presets, or per-activity toggles? | Open | Tiered presets (Silent/Quiet/Normal/Loud) simplest; per-activity most flexible |
+| 19 | Noise budget UI — slider, tiered presets, or per-activity toggles? | **Resolved** | Tiered presets (Silent/Quiet/Normal/Loud) in the Settings tab of the Bastion Window |
 
 ---
 
-*Bastion Design Document v0.8 — Working Draft*
+*Bastion Design Document v0.9 — Working Draft*
 *Maintain this file in the repo root. Update alongside implementation.*

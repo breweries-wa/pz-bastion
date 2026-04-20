@@ -141,14 +141,10 @@ local function estimateResources(rec, storage)
 
     for _, item in ipairs(allItems) do
         if isFood(item) then
-            -- Try to read calories; fall back to 500 per food item
-            local cal = 500
-            local ok, n = pcall(function() return item:getNutrition() end)
-            if ok and n then
-                local ok2, c = pcall(function() return n:getCalories() end)
-                if ok2 and type(c) == "number" and c > 0 then cal = c end
-            end
-            totalCalories = totalCalories + cal
+            -- Use a flat 500-calorie estimate per food item.
+            -- item:getNutrition() can throw a Java RuntimeException in Kahlua
+            -- that escapes pcall, so we avoid that call entirely for Phase 1.
+            totalCalories = totalCalories + 500
         end
         totalWater = totalWater + getWaterUnits(item)
     end

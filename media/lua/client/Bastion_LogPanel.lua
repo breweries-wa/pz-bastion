@@ -154,11 +154,7 @@ function BastionLogPanel.toggle(player)
     end
 end
 
--- Refresh the open panel whenever ModData is updated (server pushes new tick).
-Events.OnModDataTransmit.Add(function(key)
-    if key == Bastion.DATA_KEY and BastionLogPanel._instance then
-        BastionLogPanel._instance:populate()
-    end
-end)
+-- Note: PZ B42 does not expose an OnModDataTransmit event.
+-- The log panel re-populates each time it is opened via toggle().
 
 print("[Bastion] LogPanel done")

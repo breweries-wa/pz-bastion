@@ -167,69 +167,71 @@ Events.OnFillWorldObjectContextMenu.Add(function(playerIndex, context, worldObje
     local rec      = getMaeRecord(username)
 
     -- ── 1. Bastion mannequin interactions ─────────────────────────────────────
+    -- Note: Kahlua (PZ's Lua VM) does not support goto/::label:: syntax.
+    -- We wrap the body in `if instanceof` instead of using continue.
     for _, obj in ipairs(worldObjects) do
-        if not instanceof(obj, "IsoMannequin") then goto continue end
+        if instanceof(obj, "IsoMannequin") then
 
-        -- Mae (intro mannequin)
-        if isMaeMannequin(obj, username, rec) then
-            if not rec or not rec.introDone then
-                local idx  = rec and rec.introIndex or 1
-                local line = Bastion.DIALOGUE and Bastion.DIALOGUE.intro
-                             and Bastion.DIALOGUE.intro[idx] or "..."
-                context:addOption("Talk to Mae", obj, function(target)
-                    maeSpeak(target, line)
-                    sendClientCommand(player, Bastion.MOD_KEY, "AdvanceIntro", {})
-                end)
-            else
-                context:addOption("Check in", obj, function(target)
-                    local lines = Bastion.DIALOGUE.checkIn
-                    maeSpeak(target, lines[ZombRand(#lines) + 1])
-                end)
-                context:addOption("What do we need", obj, function(target)
-                    local lines = Bastion.DIALOGUE.needs
-                    maeSpeak(target, lines[ZombRand(#lines) + 1])
-                end)
-                context:addOption("Tell me something", obj, function(target)
-                    local lines = Bastion.DIALOGUE.flavor
-                    maeSpeak(target, lines[ZombRand(#lines) + 1])
-                end)
-            end
-            -- Suppress vanilla "Pick up / Move" for Mae.
-            return
-        end
-
-        -- Settler mannequin
-        local settler = getSettlerForMannequin(obj, rec)
-        if settler then
-            -- Greeting line based on mood
-            local lines = Bastion.SETTLER_LINES[settler.mood or "Content"]
-                       or Bastion.SETTLER_LINES.Content
-            local line  = lines[ZombRand(#lines) + 1]
-
-            -- Header: "James Smith (Cook)" — read-only info
-            local label = settler.name .. " (" .. (settler.role or "?") .. ")"
-            context:addOption(label, nil, nil)  -- non-clickable label
-
-            context:addOption("Talk to " .. (settler.name or "settler"), obj,
-                function(target) maeSpeak(target, line) end)
-
-            context:addOption("View profile", obj, function(_target)
-                -- Show backstory and trait in chat as a cheap alternative to a
-                -- full UI panel (LogPanel is a separate feature).
-                if addLineInChat then
-                    addLineInChat("── " .. settler.name .. " ──", 0.9, 0.85, 1.0, 1.0)
-                    addLineInChat(settler.backstory or "(unknown)", 0.85, 0.85, 0.85, 1.0)
-                    addLineInChat("Trait: " .. (settler.traitTag or "none"), 0.75, 0.9, 0.75, 1.0)
-                    addLineInChat("Skill: " .. (settler.skillLevel or 1)
-                                  .. "  Mood: " .. (settler.mood or "Content"), 0.75, 0.9, 0.75, 1.0)
+            -- Mae (intro mannequin)
+            if isMaeMannequin(obj, username, rec) then
+                if not rec or not rec.introDone then
+                    local idx  = rec and rec.introIndex or 1
+                    local line = Bastion.DIALOGUE and Bastion.DIALOGUE.intro
+                                 and Bastion.DIALOGUE.intro[idx] or "..."
+                    context:addOption("Talk to Mae", obj, function(target)
+                        maeSpeak(target, line)
+                        sendClientCommand(player, Bastion.MOD_KEY, "AdvanceIntro", {})
+                    end)
+                else
+                    context:addOption("Check in", obj, function(target)
+                        local lines = Bastion.DIALOGUE.checkIn
+                        maeSpeak(target, lines[ZombRand(#lines) + 1])
+                    end)
+                    context:addOption("What do we need", obj, function(target)
+                        local lines = Bastion.DIALOGUE.needs
+                        maeSpeak(target, lines[ZombRand(#lines) + 1])
+                    end)
+                    context:addOption("Tell me something", obj, function(target)
+                        local lines = Bastion.DIALOGUE.flavor
+                        maeSpeak(target, lines[ZombRand(#lines) + 1])
+                    end)
                 end
-            end)
+                -- Suppress vanilla "Pick up / Move" for Mae.
+                return
+            end
 
-            -- Suppress vanilla "Pick up / Move" for settlers.
-            return
-        end
+            -- Settler mannequin
+            local settler = getSettlerForMannequin(obj, rec)
+            if settler then
+                -- Greeting line based on mood
+                local lines = Bastion.SETTLER_LINES[settler.mood or "Content"]
+                           or Bastion.SETTLER_LINES.Content
+                local line  = lines[ZombRand(#lines) + 1]
 
-        ::continue::
+                -- Header: "James Smith (Cook)" — read-only info
+                local label = settler.name .. " (" .. (settler.role or "?") .. ")"
+                context:addOption(label, nil, nil)  -- non-clickable label
+
+                context:addOption("Talk to " .. (settler.name or "settler"), obj,
+                    function(target) maeSpeak(target, line) end)
+
+                context:addOption("View profile", obj, function(_target)
+                    -- Show backstory and trait in chat as a cheap alternative to a
+                    -- full UI panel (LogPanel is a separate feature).
+                    if addLineInChat then
+                        addLineInChat("-- " .. settler.name .. " --", 0.9, 0.85, 1.0, 1.0)
+                        addLineInChat(settler.backstory or "(unknown)", 0.85, 0.85, 0.85, 1.0)
+                        addLineInChat("Trait: " .. (settler.traitTag or "none"), 0.75, 0.9, 0.75, 1.0)
+                        addLineInChat("Skill: " .. (settler.skillLevel or 1)
+                                      .. "  Mood: " .. (settler.mood or "Content"), 0.75, 0.9, 0.75, 1.0)
+                    end
+                end)
+
+                -- Suppress vanilla "Pick up / Move" for settlers.
+                return
+            end
+
+        end  -- instanceof IsoMannequin
     end
 
     -- ── 2. Container mark-private / mark-shared ───────────────────────────────

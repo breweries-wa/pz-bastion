@@ -1,5 +1,5 @@
 # Bastion — Design Document
-> Project Zomboid Build 42 Mod | v1.0
+> Project Zomboid Build 42 Mod | v1.1
 
 ---
 
@@ -136,13 +136,42 @@ Any place in this document that describes a settler *doing* something physically
 
 ## 3. Settlement Boundary
 
-The settlement boundary determines what is "inside" the Bastion — which containers are community storage, which settlers are home, and what the zombie attraction radius covers.
+The settlement boundary determines what is "inside" the Bastion — which containers are community storage, which settlers are home, which beds and work sites count, and what the zombie attraction radius covers.
 
-**Working approach: use PZ's existing safehouse property system.**
+### 3.1 Radius-Based Boundary
 
-PZ already tracks which tiles belong to a claimed safehouse.  For v1, the Bastion boundary *is* the safehouse boundary.  The player expands the settlement by expanding the safehouse.  The mod's container scanner uses a fixed tile radius from the bastion anchor square as a practical fallback when safehouse data is unavailable.
+The boundary is a **fixed tile radius from the bastion anchor square** (the tile clicked when the bastion was established).  The radius grows automatically as the settler count increases — no manual expansion is needed.
 
-> ⚑ OPEN: PZ's safehouse system may have constraints we haven't hit yet (size limits, multi-building behavior).  Needs validation.  See Open Question #1.
+> ⚑ OPEN: Exact growth formula not yet defined.  Starting radius, step size per additional settler, and maximum radius to be tuned during Phase 3 playtesting.  See Open Question #27.
+
+Player-built extensions (walls, floors, roofed areas attached to the main building) fall inside the radius automatically because the radius is geometric, not room-based.  `sq:getRoom()` is explicitly **not** used for boundary decisions — see Section 2.4.
+
+The safehouse property system is no longer the primary boundary mechanism.  The radius is the boundary.
+
+> ⚑ OPEN: PZ's safehouse system may still be relevant for container marking / shared-container state.  Validate whether we need it at all in Phase 3.  See Open Question #1.
+
+### 3.2 Radius Visualization ("Bastion View")
+
+When the **Bastion Window is open**, the settlement radius is visualized in the world.  When it is closed, the visualization disappears.  The two are inseparable — there is no separate "show radius" toggle.
+
+**What is shown:**
+
+| Element | Behavior |
+|---------|----------|
+| **Colored tile overlay** | Each tile within the radius is tinted by category: general zone (neutral), container-bearing tiles (blue tint), bed tiles (green tint), detected work sites (yellow tint), water sources (cyan tint) |
+| **Hover labels** | Hovering the mouse over a tile within the radius shows a floating label naming the relevant object (bed, container, work site type, etc.) |
+
+Both elements activate together and deactivate together when the window opens/closes.
+
+> ⚑ OPEN: PZ's `WorldToScreen` API for rendering tile-space overlays and floating labels needs verification.  The exact draw hook (likely `Events.OnPostRenderFloor` or similar) is unconfirmed.  See Open Question #28.
+
+**Implementation approach:**
+- Client-side only; no server communication
+- On window open: build a tile list from anchor + radius, categorize each tile, store in `BastionWindow.overlayTiles`
+- Each render tick: walk `overlayTiles` and draw colored quads / floating strings
+- On window close: clear `overlayTiles`
+
+The overlay is rebuilt whenever the window is opened (not cached between sessions) to pick up any world changes since last open.
 
 ---
 
@@ -281,7 +310,7 @@ Each role has a settings record in `rec.roleSettings[roleName]` — a table of n
 | Fisher | Fishing | Production | Net and line fishing | Bait + fishing line in storage |
 | Forager | Foraging | Production | Daily resource gathering | — |
 | Defender | Aiming + Weapon | Security | Corpse disposal, perimeter patrol | — |
-| Teacher | — | Passive | Reading-speed multiplier while player is at bastion | — |
+| Teacher | — | Passive | Reading-speed multiplier while player is at bastion | Chalkboard within radius |
 | Hunter | Aiming, Trapping | Production | Hunting runs | — |
 | Child | — | Passive | — (morale lift) | — |
 | **Blacksmith** | Metal Working | Production | Scrap → ingots (not the spoon grind) | Heat source + scrap above floor |
@@ -305,6 +334,48 @@ Each role has a settings record in `rec.roleSettings[roleName]` — a table of n
 ### 6.5 Settler Arrivals
 
 New survivors arrive over time.  Arrival rate is influenced by Happiness, Resolve, and settlement visibility.  Some roles (Doctor, Teacher, Blacksmith) are quest-gated — requires finding and escorting the survivor.  (Arrival mechanics: Phase 3.)
+
+### 6.6 Beds
+
+Settlers need somewhere to sleep.  The mod counts bed capacity within the bastion radius and compares it to the settler count.
+
+**Rules:**
+- Beds must be within the bastion radius to count.  Beds outside the radius do not count.
+- Beds are **not** assigned to specific settlers.  It is a pool count only.
+- Each bed object provides one sleep slot (some objects may provide two — e.g., double beds; TBD by sprite detection).
+- If `bedCount < settlerCount`: settlers experience a **Happiness penalty** (mood state moves toward `Struggling`).  The shortage is logged and shown in the Overview.
+- If `bedCount >= settlerCount`: no effect.  Surplus beds are fine.
+
+**Detection method:** sprite-name scan within the radius.  Bed objects are identified by sprite name substrings (e.g., `"bed"`, `"cot"`, `"mattress"`).
+
+> ⚑ OPEN: Exact sprite name substrings for single beds, double beds, and cots need to be verified against PZ B42 furniture sprites.  See Open Question #29.
+
+### 6.7 Work Sites
+
+Work sites are physical objects required for certain roles to operate at full effectiveness (a stove for the Cook, a forge for the Blacksmith, a classroom chalkboard for the Teacher).
+
+**Rules:**
+- Work site presence is a **boolean per role type**: does ANY qualifying object exist within the radius?
+- Work sites are **shared** — if there are 3 Cooks and 1 stove, all 3 Cooks benefit.  No per-settler assignment.
+- If no work site is found: the role operates at **reduced productivity** (yield penalty, e.g. 50% output).  This is a productivity issue, not a happiness issue — settlers are not unhappy, just less effective.
+- The penalty is logged clearly: "Rosa cooked meals but no stove was found — output reduced."
+
+**Detection method:** recipe-based lookup via `CraftRecipeManager` (or equivalent B42 API).  Query what objects/surfaces a relevant recipe requires, then check for those objects within the radius.  This is more mod-compatible than a hardcoded sprite list: mods that add new cooking appliances or forges will automatically be recognized if they register their recipes correctly.
+
+> ⚑ OPEN: The correct B42 API for recipe-to-required-object lookup is unconfirmed.  `CraftRecipeManager` is a candidate.  See Open Question #30.
+
+**Work site requirements by role:**
+
+| Role | Requires | Fallback (no site) |
+|------|----------|--------------------|
+| Cook | Stove, oven, or campfire | 50% meal output |
+| Doctor | Heat source (stove, campfire) | Already gated by `hasHeatSource` — may overlap |
+| Blacksmith | Forge or metalworking station | 50% ingot output |
+| Teacher | Chalkboard within radius | Role inactive entirely (chalkboard is prerequisite, not a productivity modifier) |
+| Woodcutter | Sawmill or workbench | No penalty — splitting logs needs no appliance |
+| Tailor | Sewing machine | 50% thread/repair output |
+
+*Other roles have no work site requirement.*
 
 ---
 
@@ -725,25 +796,34 @@ Traps must be placed **outside** the bastion's indoor zone to work (you don't tr
 
 ---
 
-### Phase 3 — Production Claiming & Score Depth 📋 PLANNED
+### Phase 3 — Production Claiming, Score Depth & Bastion View 📋 PLANNED
 
-**Goal:** Make settler output tangible; deepen score feedback.
+**Goal:** Make settler output tangible; deepen score feedback; bring the radius to life visually; implement bed and work site systems.
 
 **Design decisions needed before implementation:**
 
 1. Virtual yield claiming: which container does output land in?  Options: nearest non-private container with space; a designated "settler output" container the player marks; the first container scanned.  Recommended: nearest non-private container with space, logged clearly.
 2. Item type strings: PZ item type names for thread (`Thread`), sterilized bandage (`BandageSterilized`?), ingot (`IronIngot`?).  Need verification against PZ B42 item registry.
 3. Settler skill advancement rate: once per N ticks where the role ran successfully.  N = 7 (once per week) as a starting point.
+4. Radius visualization: confirm `WorldToScreen` / overlay draw hook available in B42.  See Open Question #28.
+5. Bed sprite list: confirm sprite name substrings for all bed/cot/mattress types.  See Open Question #29.
+6. Work site recipe API: confirm `CraftRecipeManager` or equivalent.  See Open Question #30.
+7. Radius expansion formula: starting radius, step per settler, maximum.  See Open Question #27.
 
 **Scope:**
 
+- [ ] **Radius visualization ("Bastion View")**: colored tile overlay + hover labels shown while Bastion Window is open (see Section 3.2)
+- [ ] **Dynamic radius expansion**: radius grows automatically with settler count (formula: Open Question #27)
+- [ ] **Bed counting system**: sprite-name scan within radius; deficit → Happiness penalty; shown in Overview (see Section 6.6)
+- [ ] **Work site detection**: recipe-based boolean scan per role; no site → productivity penalty; shown in Overview (see Section 6.7)
+- [ ] **Teacher chalkboard dependency**: Teacher inactive if no chalkboard found within radius
 - [ ] Virtual yield claiming: "Collect Production" action in Overview tab spawns yield as actual items
 - [ ] Score contributor breakdown in Overview (contributor table below each score)
 - [ ] Settler mood state triggers: food shortage → Struggling; prolonged Struggling → Critical; player interaction → improves
 - [ ] Death weight: death log entry uses name + trait tag
 - [ ] Settler arrival mechanics: new NPCs arrive based on Happiness / Resolve; arrival rate configurable
 - [ ] Skill advancement: settlers improve at their role over time
-- [ ] Teacher reading speed multiplier (if API confirmed)
+- [ ] Teacher reading speed multiplier (if API confirmed; see Open Question #20)
 - [ ] Kitchen awareness: food drift toward cooking appliances
 - [ ] Expanded admin commands: `/bastion settler list/add/remove/mood/role`, `/bastion food/water`
 - [ ] Phase 3 test plan (to be written before implementation)
@@ -1086,9 +1166,14 @@ Run after Phase 1 tests pass.  Requires: bastion established, at least one settl
 | 22 | Item type strings for virtual yield claiming (Thread, BandageSterilized, IronIngot) | Open | Verify against PZ B42 item registry before Phase 3 |
 | 23 | Role settings UI: editable fields in Settings tab vs. separate per-settler panel? | Open | Phase 3 design; per-role settings (not per-settler) in Settings tab recommended |
 | 24 | Trapper: can `IsoTrap` be found via `instanceof` and `sq:getObjects()` in B42? | Open | Phase 2 implementation; verify in test environment |
-| 25 | WaterCarrier: does `sq:isWater()` reliably identify ponds and rivers in B42? | Open | Phase 2 implementation; verify against different water body types |
+| 25 | WaterCarrier: does `sq:isWater()` reliably identify ponds and rivers in B42? | **Resolved** | `sq:isWater()` throws a Java exception that escapes Kahlua `pcall` in B42 — cannot be used at all.  Natural water terrain detection deferred; sprite-name scan (rain barrels, wells) is the current fallback.  See OQ #26 for a safe alternative. |
+| 26 | Natural water terrain (ponds, rivers): B42-safe detection method? | Open | `sq:isWater()` is off the table (see OQ #25).  Candidates: iterate `sq:getObjects()` looking for water-tagged sprite names; check tile definition via `TileDefinition`; use `getWorld():getWater()` if it exists.  None confirmed in B42 yet. |
+| 27 | Radius expansion formula: starting size, step per settler, maximum? | Open | Phase 3 design.  Candidates: flat +2 tiles per settler; logarithmic growth.  Needs playtesting to tune. |
+| 28 | `WorldToScreen` / tile overlay draw hook in B42: what is the correct API? | Open | Need to confirm the right event hook (likely `Events.OnPostRenderFloor` or `Events.OnRenderTick`) and whether tile-space coordinate conversion is exposed via Lua.  Required for radius visualization (Section 3.2). |
+| 29 | Bed sprite name substrings: what names cover all single beds, double beds, and cots in B42? | Open | Candidates: `"bed"`, `"cot"`, `"mattress"`.  Verify against PZ B42 furniture sprite list before implementation. |
+| 30 | Work site recipe lookup API: is `CraftRecipeManager` (or equivalent) the right approach in B42? | Open | Recipe-based detection preferred over hardcoded sprite lists for mod compatibility.  Need to confirm the API surface, whether it exposes required objects/surfaces per recipe, and performance implications of calling it at tick time. |
 
 ---
 
-*Bastion Design Document v1.0*
+*Bastion Design Document v1.1*
 *Design before code.  Tests before implementation.  Update this file whenever a decision changes.*

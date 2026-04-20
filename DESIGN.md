@@ -1,5 +1,15 @@
 # Bastion — Design Document
-> Project Zomboid Build 42 Mod | v0.8 Draft
+> Project Zomboid Build 42 Mod | v1.0
+
+---
+
+## Development Workflow
+
+**Design before code.**  The design document is the source of truth for what the mod does.  Updates to phases, systems, and tests are made here first.  Code follows the design.  If code diverges from the document during implementation, the document is updated immediately to reflect the actual decision and the reason for it.
+
+**Each phase has a test plan.**  Tests are written alongside the design spec — before implementation begins.  Tests are numbered hierarchically (T{group}.{test}).  Untested behavior doesn't ship.
+
+**Open questions are tracked explicitly.**  If a design decision is unsettled, it lives in Section 16.  Resolved questions stay in the table with status `Resolved` and a brief note.
 
 ---
 
@@ -18,16 +28,16 @@
 12. [NPC Representation](#12-npc-representation)
 13. [Comparable Games & Borrowed Mechanics](#13-comparable-games--borrowed-mechanics)
 14. [Implementation Phases](#14-implementation-phases)
-15. [Phase 1 Test Plan](#15-phase-1-test-plan)
+15. [Test Plans](#15-test-plans)
 16. [Open Questions](#16-open-questions)
 
 ---
 
 ## 1. Concept
 
-Bastion is a community-building mod for Project Zomboid. You are the scavenger — the one who goes out into the dangerous world to bring things back. The community depends on you. You depend on the community.
+Bastion is a community-building mod for Project Zomboid.  You are the scavenger — the one who goes out into the dangerous world to bring things back.  The community depends on you.  You depend on the community.
 
-The mod adds something to care about. The people in your settlement have names, roles, and light personalities. When someone dies, someone says their name. That's enough.
+The mod adds something to care about.  The people in your settlement have names, roles, and light personalities.  When someone dies, someone says their name.  That's enough.
 
 ### 1.1 Core Fantasy
 
@@ -36,14 +46,34 @@ The mod adds something to care about. The people in your settlement have names, 
 - Coming back feels like coming home
 - Each survivor added is a small victory with ongoing stakes
 
-### 1.2 Endgame Goal: Self-Sufficiency
+### 1.2 Settler Purpose: Taking Over the Grind
+
+Build 42 added significant repetitive work to the survival loop: picking thread from rags, boiling rags into bandages, the blacksmith spoon-grind, watering every crop plot individually, checking trap lines, daily animal husbandry.  These tasks are necessary but not interesting.  The Indie Stone has stated that B42's grind is intentionally designed for NPC delegation in the planned B43 NPC system.  Bastion delivers that vision early.
+
+The design principle: **settlers take over tasks that are time-consuming by repetition, not by decision**.  If the interesting part of a task is the first time you do it, the settler should handle every subsequent iteration.
+
+Examples of what settlers take from the player:
+- Tailor picks thread from rags and washes dirty rags daily (but never depletes the rag supply — configurable cap)
+- Doctor boils rags into sterilized bandages (up to a cap; the stock is there when needed)
+- WaterCarrier collects and boils dirty water into the settler water pool (so other roles don't drain player containers)
+- Cook uses perishable food first — the food that would spoil before the player eats it
+- Blacksmith smelts scrap into ingots — prep work, not the XP grind the player wants to run themselves
+- Rancher feeds animals, collects eggs and milk daily
+
+What settlers **do not** take:
+- Resources the player needs for skill advancement (e.g., the spoon grind stays for the player; the blacksmith only smelts scrap above a configurable floor)
+- Shelf-stable reserves unless explicitly allowed (Cook default: perishables only)
+- All water (the settler pool supplements — it never replaces — player container water)
+- The last unit of any resource (every role has a floor setting it respects)
+
+### 1.3 Endgame Goal: Self-Sufficiency
 
 The long-term goal is a community that can sustain itself across five pillars:
 
 | Pillar | What Self-Sufficiency Looks Like |
 |--------|----------------------------------|
 | Food | Farming + preservation produce enough calories; no dependence on looting for sustenance |
-| Water | Rain collection, wells, or purification sustain the population without outside supply runs |
+| Water | WaterCarriers + rain collection sustain the population without outside supply runs |
 | Medical | Doctor, herb garden, and crafted supplies handle illness and injury without hospital raids |
 | Defense | Defenders, fortifications, and threat management handle zombie pressure autonomously |
 | Morale | Reading, community culture, and children sustain morale without constant intervention |
@@ -52,44 +82,55 @@ The long-term goal is a community that can sustain itself across five pillars:
 
 ## 2. Technical Constraints
 
-What PZ's Lua modding API can and cannot do. These are hard limits, not design choices. Every system in this document should be read with these in mind.
+What PZ's Lua modding API can and cannot do.  These are hard limits, not design choices.  Every system in this document should be read with these in mind.
 
 ### 2.1 Truly Impossible (Java-side, no Lua exposure)
 
 **Animated, pathfinding NPCs.**
-PZ's character movement, pathfinding, and animation systems are Java. There is no Lua API to create a walking, animated NPC. The B42 team is building a native NPC system, but it is not yet moddable. Until that changes, settlers cannot physically move through the world. Every design element that implies a settler *doing something physically* — walking to the woodpile, patrolling a perimeter, following the player — is a simulation that exists only in the log. The NPC Representation section (Section 11) addresses what we can fake and how.
+PZ's character movement, pathfinding, and animation systems are Java.  There is no Lua API to create a walking, animated NPC.  The B42 team is building a native NPC system, but it is not yet moddable.  Until that changes, settlers cannot physically move through the world.  Every design element that implies a settler *doing something physically* — walking to the woodpile, patrolling a perimeter, following the player — is a simulation that exists only in the log.  Section 12 addresses what we can fake and how.
 
 **Modifying zombie noise/attraction AI.**
-Zombie pathfinding toward sound sources is Java. We cannot make zombies genuinely react to settlement noise. The simulation: schedule zombie spawns near the settlement at a rate derived from the noise score. The effect is the same from the player's perspective; the mechanism is different.
+Zombie pathfinding toward sound sources is Java.  We cannot make zombies genuinely react to settlement noise.  The simulation: schedule zombie spawns near the settlement at a rate derived from the noise score.  The effect is the same from the player's perspective; the mechanism is different.
 
 **Real escort quests.**
-An NPC following the player through the open world requires pathfinding. Not possible. The mod version: the player finds a quest target, right-clicks to recruit them, and they appear at the settlement. The journey is implied, not animated.
+An NPC following the player through the open world requires pathfinding.  Not possible.  The mod version: the player finds a quest target, right-clicks to recruit them, and they appear at the settlement.  The journey is implied, not animated.
 
-### 2.2 Requires Custom Simulation (PZ system not exposed or insufficient)
+### 2.2 Requires Custom Simulation
 
 **Settler skill advancement.**
-PZ's XP and skill system is for the player character only. Settler skill levels are plain numbers stored in ModData, incremented by our own logic each tick. It works; it's just not PZ's system.
+PZ's XP and skill system is for the player character only.  Settler skill levels are plain numbers stored in ModData, incremented by our own logic each tick.
 
 **Farmer interacting with crops.**
-PZ has a farming system, but whether it exposes enough Lua API for a mod to programmatically read crop state, water crops, and trigger harvests is unverified. May fall back to: Farmer adds harvested food to community inventory on tick, with no actual crop object interaction.
+PZ's farming Lua API surface is unverified.  Fall back to: Farmer adds harvested food to virtual yield on tick, with no actual crop object interaction, until verified otherwise.
 
 **Refrigerated storage genuinely slowing spoilage.**
-In vanilla PZ, items inside a powered fridge spoil slower — that's Java-side, tied to the fridge object's power state. When we label a storage category "Refrigerated," we're tracking the label in ModData. The actual spoilage rate only slows if the item physically resides in a real fridge container. Our category labels and PZ's spoilage logic are separate systems; bridging them requires placing items in actual fridge objects, not just tagging containers.
+In vanilla PZ, items inside a powered fridge spoil slower — that's Java-side.  Our category labels and PZ's spoilage logic are separate systems.
 
-**Radio range detection.**
-We can check if the player carries a walkie-talkie. Whether we can read PZ's internal radio frequency and range system to validate that the player is actually in range of the settlement's ham radio is unverified. Fallback: a simple tile-distance check.
+**Reading speed modification.**
+Modifying how fast the player reads a skill book requires a client-side tick hook watching for an open book.  The Teacher role sets `teacherActive = true`; the client applies a reading time modifier when that flag is set and the player is inside the bastion.  Exact API for reading state is unverified — see Open Question #20.
 
 ### 2.3 Feasible but With Known Risks
 
+**Item spawning in containers (virtual yield claiming).**
+The server can call `container:addItem()` to place items in world containers.  Risk: finding the right container, handling full containers, ensuring the item type string is valid.  This is Phase 3 work.  For now, virtual yield is tracked in ModData and displayed; the player cannot claim it as physical items yet.
+
 **Item registry performance.**
-Iterating every container in the settlement and every item in each container on every tick is fine at small scale. At large settlements it may cause frame hitches. The registry must be built with caching and should not scan the world more than once per tick.
+Iterating every container in the settlement on every tick is fine at small scale.  At large settlements it may cause frame hitches.  The registry is built with caching and does not scan the world more than once per tick.
 
-**Kitchen item drift.**
-Moving items between containers is technically possible. The risk is player surprise — personal items end up somewhere unexpected. Needs tight opt-out controls and conservative drift logic.
+**World-state cache (water source, heat source, animals).**
+Scanning 50-tile radius for water sources at every tick would be expensive.  Cache results are refreshed every 7 in-game days.  The player can force a refresh by disbanding and re-establishing (or via admin command in a later phase).
 
-### 2.4 The Consequence for Design Language
+### 2.4 Kahlua-Specific Gotchas
 
-Any place in this document that describes a settler *doing* something physically should be understood as shorthand for: **the tick runs, the log records it, the outcome is applied.** "Timmy walked to the treeline and chopped wood" means "the Woodcutter tick ran, two logs were added to community storage, and a log entry was written." There is no Timmy walking anywhere. This is not a limitation to apologize for — it is the design. The log is the simulation.
+- **No `goto` / `::label::`** — Lua 5.1 only.  Use `if instanceof` blocks instead of `continue`.
+- **Java exceptions escape `pcall`** — `item:getNutrition():getCalories()` can throw a Java `RuntimeException` that `pcall` cannot catch.  All Java-backed calls go through `pcall` chains; fallback flat estimates used where exceptions are known to occur.
+- **`math.random` is nil** — use `ZombRand(n)` instead.  Returns 0 to n-1.
+- **`Events.OnModDataTransmit` does not exist in B42** — removed; panels repopulate on open.
+- **`table.unpack` is nil** — use `unpack` (Lua 5.1 global).
+
+### 2.5 The Consequence for Design Language
+
+Any place in this document that describes a settler *doing* something physically should be understood as shorthand for: **the tick runs, the log records it, the outcome is applied.**  "Timmy walked to the treeline and chopped wood" means "the Woodcutter tick ran, a plank count was added to virtual yield, and a log entry was written."  There is no Timmy walking anywhere.  This is not a limitation to apologize for — it is the design.  The log is the simulation.
 
 ---
 
@@ -99,176 +140,189 @@ The settlement boundary determines what is "inside" the Bastion — which contai
 
 **Working approach: use PZ's existing safehouse property system.**
 
-PZ already tracks which tiles belong to a claimed safehouse and enforces rules against claiming while zombies are on the property. For v1, the Bastion boundary *is* the safehouse boundary. The player expands the settlement by expanding the safehouse — no new boundary UI needed.
+PZ already tracks which tiles belong to a claimed safehouse.  For v1, the Bastion boundary *is* the safehouse boundary.  The player expands the settlement by expanding the safehouse.  The mod's container scanner uses a fixed tile radius from the bastion anchor square as a practical fallback when safehouse data is unavailable.
 
-> ⚑ OPEN: PZ's safehouse system may have constraints we haven't hit yet (size limits, multi-building behavior). Needs validation in Phase 1.
+> ⚑ OPEN: PZ's safehouse system may have constraints we haven't hit yet (size limits, multi-building behavior).  Needs validation.  See Open Question #1.
 
 ---
 
 ## 4. The Settlement Tick
 
-Settlers don't visibly walk around performing tasks. Instead, the simulation advances on a **settlement tick** — once per in-game day (adjustable). On each tick, each settler with an assigned role performs their function invisibly and the result is logged.
+Settlers don't visibly walk around performing tasks.  Instead, the simulation advances on a **settlement tick** — once per in-game day.  On each tick, each settler with an assigned role performs their function invisibly and the result is logged.
 
-### 3.1 How the Tick Works
+### 4.1 How the Tick Works
 
 On each tick, for each settler:
-1. Check if their role's requirements are met (resources available, tools present, skill sufficient)
-2. If yes: apply the effect (add/consume items, update scores)
-3. If no: log a shortage or idle message
+1. Check if their role's requirements are met (resources available, tools present, skill sufficient, resource floor not hit, cap not reached)
+2. If yes: apply the effect (add to virtual yield, update scores, debit from settler water pool)
+3. If no: log a shortage or idle message — never silently skip
 4. Append a log entry
 
-### 3.2 Log Messages
+### 4.2 Log Message Style
 
-Short, named, specific.
+Short, named, specific.  The player should be able to read the log and understand exactly what happened without inferring.
 
 ```
 Timmy collected 2 logs from the woodpile.
-Timmy cut 3 planks (logs were plentiful).
-Rosa cooked a warm meal. The community ate well.
-Rosa couldn't cook — no fuel in the firepit.
-Dr. Okafor treated a minor infection. No supplies used.
-Dr. Okafor is low on bandages. Bring more.
-Marcus repaired the pickup truck (engine: 68% → 74%).
-No water collected today — barrels are full.
-Sarah has been struggling. She didn't contribute today.
+Timmy — plank stock at cap (60). No logs consumed.
+Rosa prepared 4 meals (3 from perishables).
+Rosa couldn't cook — settler water supply too low for washing.
+Dr. Okafor sterilized 5 bandages. Stock: 17/20.
+Dr. Okafor — no heat source in bastion; can't sterilize.
+Sarah collected and boiled water. +2.0 days to pool (6.5 / 21.0).
+Sarah couldn't collect water — no water source found nearby.
+Marcus — thread stock is at cap (50). No rags consumed.
 [QUIET MODE] Woodcutting skipped — noise budget exceeded.
 ```
 
-Critical shortages surface as notifications even when the log is closed.
+### 4.3 Tick Frequency
 
-### 3.3 Tick Frequency
-
-> ⚑ OPEN: Once per in-game day is simplest and most legible. Start there and adjust.
+Once per in-game day.  The check runs on `Events.EveryOneMinute`; the tick fires only if the current in-game day is greater than `rec.lastTickDay`.
 
 ---
 
 ## 5. Community Scores
 
-Community-wide metrics that influence settler behavior, production, and arrival rates. Two categories: objective resource gauges and slower-moving subjective scores.
+Community-wide metrics that influence settler behavior, production, and arrival rates.
 
-### 4.1 Resource Scores (Objective Gauges)
+### 5.1 Resource Scores (Objective Gauges)
 
 | Score | What It Measures | Critical Effect |
 |-------|-----------------|-----------------|
-| **Food** | Days of food remaining at current consumption | Below 3 days: Happiness drops; defection risk |
-| **Water** | Days of water remaining | Below 2 days: Cook and Doctor lose effectiveness |
-| **Health** | Community-wide injury/illness load | Low: productivity loss; death risk without intervention |
-| **Defense** | Threat level vs. defensive capability | Deficit: incursions escalate |
-| **Storage** | Available community storage capacity | Full: specialists can't deposit output; work halts |
-| **Noise** | Current noise output vs. player-set budget | Over budget: noisy activities suppressed or trigger threat |
+| **Food** | Days of food remaining at current consumption | Below 3 days: warning logged; below 1: Happiness drops |
+| **Water** | Days of water (containers + settler pool) | Below 2 days: Doctor and Farmer skip water-using steps |
+| **Settler Water Pool** | Settler-managed water buffer (days) | Fills from WaterCarrier role; drawn by Doctor, Farmer, Tailor |
+| **Noise** | Current noise output vs. player-set budget | Over budget: noisy roles suppressed |
+| **Storage** | Available community container capacity | Full: virtual yield can't be deposited |
 
-### 4.2 Subjective Scores
+### 5.2 Subjective Scores
 
-Slower to move. Reflect the emotional and social state of the settlement.
+Slower to move.  Reflect the emotional and social state of the settlement.
 
 | Score | What It Measures |
 |-------|-----------------|
 | **Happiness** | Day-to-day comfort and quality of life |
 | **Resolve** | Long-term will to survive; hope |
-| **Education** | Accumulated community knowledge and skills |
+| **Education** | Accumulated community knowledge |
 
-> ⚑ OPEN: Are these the right scores? Are there others worth tracking? Revisit after Phase 2 with real data.
+> ⚑ OPEN: Score threshold values and decay rates not yet tuned.  See Open Question #7.
 
-### 4.3 Score Contributor UI
+### 5.3 Score Contributor UI (Phase 3 target)
 
-Every score in the Bastion Window's Overview tab lists every active contributor directly below it. The player should never guess why a score is moving.
+Every score in the Overview tab lists every active contributor directly below it.  The player should never guess why a score is moving.
 
 ```
-OVERVIEW — COMMUNITY STATUS
+OVERVIEW
 ────────────────────────────
 Food: 8 days  [OK]
   + Rosa cooking (reduces waste)       +1 day
   - 6 settlers consuming               -0.8/day
 
-Noise: 4 / 6  [OK]
-  + Woodcutter active                  +2
-  + Defender patrol (occasional shots) +1
-  + General settlement activity        +1
-  - Quiet mode: gunshots restricted    -1
+Water: 6.2 days  (1.5 from settler pool)  [OK]
+  + Sarah (Water Carrier)              +2.0/day
+  - Doctor sterilizing bandages        -0.8/day
+  - Farmer watering crops              -1.0/day
 
-Resolve: 41  [~]
-  + Successful defense (3 days ago)    +6
-  - Marcus died                        -18
+Noise: 4 / 6  [OK]
+  + Woodcutter chopping                +3
+  + General settlement presence        +1
+  [Silent mode: smithing suppressed]
 ```
+
+The contributor breakdown is a Phase 3 feature.  Phase 1–2 show the score value only.
 
 ---
 
 ## 6. Settlers & Specialists
 
-### 5.1 Design Principle
+### 6.1 Design Principle
 
-Settlers exist in the settlement and in the log. The player learns who they are through tick reports, observation, and the Settlers tab in the Bastion Window — a roster that shows name, role, mood, and skill level, with an expandable profile per settler. The roster is read-only from the player's perspective; settler management (adding, removing, editing roles) is an admin-only function accessed via chat commands or the debug panel.
+Settlers exist in the settlement and in the log.  The player learns who they are through tick reports, the Settlers tab in the Bastion Window, and right-click dialogue.  The roster is read-only from the player's perspective; settler management (adding, removing, editing roles) is an admin-only function accessed via chat commands or the debug panel.
 
-### 5.2 Skill-Based Roles
+### 6.2 Skill-Based Roles
 
-Every PZ skill maps to a specialist role. A settler assigned to a role performs tick actions appropriate to their **skill level** — higher skill means more efficient recipes, better outputs, and less waste. Recipes with a minimum skill requirement are only usable by settlers who qualify.
+Every PZ skill maps to a specialist role.  A settler assigned to a role performs tick actions appropriate to their **skill level** — higher skill means more efficient recipes, better output, and less waste.  Roles with a minimum skill requirement are only usable by settlers who qualify.
 
-**Example:** A Cook at skill level 1 can prepare basic meals. A Cook at level 5 can preserve food in jars, reducing waste. A Cook at level 8 can produce high-nutrition meals that provide a Happiness bonus beyond what low-skill cooking provides.
+**Example:** A Cook at skill level 1 prepares basic meals from perishables only.  A Cook at level 5 can preserve food in jars, reducing waste.  A Cook at level 8 produces high-nutrition meals that provide a Happiness bonus.
 
-Skill levels improve over time — settlers learn by doing.
+Skill levels improve over time — settlers learn by doing.  (Advancement rate: Phase 3 feature.)
 
-#### Full Role List
+### 6.3 Per-Role Settings
 
-| Role | Primary Skill(s) | Type | Notes |
-|------|-----------------|------|-------|
-| Farmer | Farming | Production | Seasonal; ties into PZ crop system |
-| Cook | Cooking | Production | Kitchen-aware; uses nearest cooking appliances |
-| Doctor | First Aid | Support | Reduces infection, illness spread |
-| Mechanic | Mechanics | Maintenance | Daily vehicle repair tick |
-| Carpenter | Carpentry | Production | Planks, furniture, structural repair |
-| Woodcutter | Axe | Production | Logs → planks; heating fuel |
-| Electrician | Electrical | Maintenance | Keeps powered appliances functional |
-| Welder | Welding / Metal Working | Production | Metal fabrication; gates some Blacksmith tasks |
-| Blacksmith | Metal Working + Blacksmithing | Production | B42-gated; requires Education threshold |
-| Tailor | Tailoring | Maintenance | Clothing repair and basic gear crafting |
-| Trapper | Trapping | Production | Passive food from traps placed near settlement |
-| Fisher | Fishing | Production | Passive food from water sources in range |
-| Forager | Foraging | Production | Collects wild plants and forageable items nearby |
-| Defender | Aiming + Weapon skill | Security | Patrols; handles probes; noise variable |
-| Teacher | — | Passive | No skill requirement; raises Education score |
-| Child | — | Passive | No skill requirement; raises Resolve |
+Each role has a settings record in `rec.roleSettings[roleName]` — a table of named parameters initialized from `Bastion.ROLE_SETTINGS_DEFAULTS`.  These are changed via the `SetRoleSetting` client command (and eventually via a Settings tab UI in a later phase).
 
-#### Bundled Professions
+**Resource floor principle:** every role that consumes a limited resource has at least one setting that defines a floor or cap.  The settler **stops** when the cap is reached and logs clearly that it has.  It never silently consumes toward zero.
 
-Some professions draw on multiple skills, reflecting real-world expertise that doesn't fit a single PZ skill.
+| Role | Key Settings | Purpose |
+|------|-------------|---------|
+| Tailor | `maxThread = 50`, `addPatches = false` | Stop picking thread at cap; clothing repair at skill 8+ |
+| Doctor | `maxBandages = 20` | Stop making bandages at cap |
+| Cook | `mealsPerDay = 0` (auto), `allowDryGoods = false` | Auto-sizes to settlers + 1; never touches shelf-stable reserves by default |
+| Farmer | `saveSeeds = true` | Set aside ~15% of harvest as seeds before reporting yield |
+| Woodcutter | `maxPlanks = 60`, `keepFiresLit = true` | Cap plank production; secondary task of keeping fires fueled |
+| Fisher | `fishRadius = 80`, `maxFishStock = 30` | Cap to prevent overfishing |
+| Trapper | `trapRadius = 60` | Search radius for set traps (Phase 2+) |
+| Mechanic | `vehicleRadius = 30`, `fuelOnly = false` | Radius for vehicle checks; fuelOnly skips part maintenance |
+| Blacksmith | `maxIngots = 20`, `scrapFloor = 10` | Cap ingot production; always leave scrapFloor items for the player |
+| Rancher | `minGrainReserve = 10` | Never feed animals below this grain count |
+| WaterCarrier | `collectRadius = 50` | Scan radius for water sources (ponds, rain barrels) |
+
+### 6.4 Full Role List
+
+| Role | Primary Skill | Type | Tedium Replaced | Requires |
+|------|--------------|------|-----------------|---------|
+| Farmer | Farming | Production | Daily watering, composting, harvest | Water from pool |
+| Cook | Cooking | Production | Perishable-first meal prep | Heat source (for advanced meals) |
+| Doctor | First Aid | Support | Boiling rags → sterilized bandages | Water pool + heat source |
+| Mechanic | Mechanics | Maintenance | Generator refueling, vehicle inspection | Fuel/parts in storage |
+| Woodcutter | Axe | Production | Log splitting, fire stoking | Axe in storage |
+| Tailor | Tailoring | Maintenance | Thread picking, rag washing, hole repair | Water pool (washing) |
+| Trapper | Trapping | Production | Trap checking, resetting, baiting | Bait in storage |
+| Fisher | Fishing | Production | Net and line fishing | Bait + fishing line in storage |
+| Forager | Foraging | Production | Daily resource gathering | — |
+| Defender | Aiming + Weapon | Security | Corpse disposal, perimeter patrol | — |
+| Teacher | — | Passive | Reading-speed multiplier while player is at bastion | — |
+| Hunter | Aiming, Trapping | Production | Hunting runs | — |
+| Child | — | Passive | — (morale lift) | — |
+| **Blacksmith** | Metal Working | Production | Scrap → ingots (not the spoon grind) | Heat source + scrap above floor |
+| **Rancher** | Animal Husb. | Maintenance | Daily feeding, milking, egg collection | Grain reserve above floor; animals detected |
+| **WaterCarrier** | — | Production | Collecting and boiling water | Water source nearby + heat source + pot |
+
+#### Bundled Professions (Phase 4+)
 
 | Profession | Skills Bundled | Rationale |
 |-----------|---------------|-----------|
-| **Hunter** | Aiming, Short Blade (skinning), Trapping | Finding, killing, and processing game |
-| **Scout** | Sprinting, Lightfooted, Sneak | Perimeter awareness; reduces threat detection delay |
-| **Soldier** | Aiming, Reloading, Long Blunt or Long Blade | Combat-focused Defender variant; high noise |
-| **Medic** | First Aid, Tailoring (wound dressing) | Field medicine; slightly broader than Doctor |
+| Scout | Sprinting, Lightfooted, Sneak | Perimeter awareness; reduces threat detection delay |
+| Soldier | Aiming, Reloading, Long Blunt/Blade | Combat-focused Defender; high noise |
+| Medic | First Aid, Tailoring | Field medicine; broader than Doctor |
 
-> ⚑ OPEN: How do bundled professions advance in skill? Does each skill track separately, or does the profession have a single level? Recommendation: track separately, advance independently.
+#### Role Limitations by Design
 
-#### Non-Skill Roles
+- **Blacksmith does not run the spoon grind.**  The spoon grind exists so the player can advance their own Metalworking skill.  The settler smelts scrap into ingots (prep work) and stops there.  If the player needs ingot stock, the settler provides it.  If the player needs to level Metalworking, they do that themselves.
+- **Cook does not touch dry goods by default.**  Dried beans, canned goods, and other non-perishables are the player's long-term reserves.  They only get cooked if the player explicitly sets `allowDryGoods = true`.
+- **Farmer saves seeds by default.**  Consuming the entire harvest means nothing to plant next season.  The farmer always sets aside a fraction.
 
-- **Teacher**: No combat or craft skill. Raises Education score by being present and having books available. Effect is slow and long-term.
-- **Child**: No contribution to production. Raises Resolve passively — the presence of children signals a future worth protecting. Cannot be assigned a specialist role.
+### 6.5 Settler Arrivals
 
-### 5.3 Settler Arrivals
-
-New survivors arrive over time. Arrival rate is influenced by Happiness, Resolve, and settlement visibility. Some roles (Doctor, Teacher, Blacksmith) are quest-gated — requires finding and escorting the survivor.
+New survivors arrive over time.  Arrival rate is influenced by Happiness, Resolve, and settlement visibility.  Some roles (Doctor, Teacher, Blacksmith) are quest-gated — requires finding and escorting the survivor.  (Arrival mechanics: Phase 3.)
 
 ---
 
 ## 7. NPC Generation
 
-Bastion uses PZ's RNG patterns for all settler generation. No hand-authored characters.
+Bastion uses PZ's RNG patterns for all settler generation.  No hand-authored characters.
 
-### 6.1 Generation Layers
+### 7.1 Generation Layers
 
-**Name:** Pull from PZ's regional name tables by gender.
+**Name:** First + last from gender-appropriate pools (30 male, 30 female, 40 last names).
 
-**Role:** Fill open community needs first. Assign randomly if no gap, or leave unassigned.
+**Role:** Fill open community needs first.  Assign randomly if no gap.
 
-**Skill Level:** Random within a plausible range for the role. A Doctor arrives with First Aid 3–6. A Child arrives with no applicable skills.
+**Skill Level:** `ZombRand(4) + 1` (1–4).  Role-appropriate range tuning: Phase 3.
 
-**Trait Tags:** 1–2 tags from a pool of ~25–30. Narrative flags, not stat modifiers. Surface in log messages.
+**Trait Tags:** 1 tag from a pool of ~23.  Narrative flags, not stat modifiers.  Appear in arrival log and Settlers tab profile.
 
-Example tags: `Optimist`, `Nervous`, `Practical`, `Bad Dreams`, `Keeps to Herself`, `Tells Bad Jokes`, `Believes in Something`, `Gets Quiet When It Rains`, `Former Teacher`, `Light Sleeper`
-
-**Backstory Seed:** One generated line. `[occupation] from [PZ location] who [circumstance]`. Shown once in the arrival log. Implied thereafter.
+**Backstory Seed:** One generated line.  `[occupation] from [PZ location] who [circumstance]`.  Shown in arrival log; available in Settlers tab.
 
 **Mood State:**
 
@@ -278,135 +332,139 @@ Example tags: `Optimist`, `Nervous`, `Practical`, `Bad Dreams`, `Keeps to Hersel
 | `Struggling` | Reduced output; flagged in log |
 | `Critical` | No contribution; leaves if unresolved |
 
-### 6.2 Death Weight
+### 7.2 Death Weight
 
-> *"Marcus didn't make it. He was the one who always had something to say at the wrong moment. We're going to feel that."*
+> *"Marcus didn't make it.  He was the one who always had something to say at the wrong moment.  We're going to feel that."*
 
-No death screen. Just a log entry, and silence.
+No death screen.  Just a log entry with their name and trait tag, and silence.
 
 ---
 
 ## 8. Resources & Storage
 
-### 7.1 Community Storage
+### 8.1 Community Storage
 
-All containers within the settlement boundary are **community storage by default**. The player marks individual containers as **private** to exclude them from the simulation. This inversion (opt-out rather than opt-in) is more natural — the settlement owns what's in its walls unless the player claims it personally.
+All containers within the settlement boundary are **community storage by default**.  The player marks individual containers as **private** to exclude them from the simulation.
 
 **Storage categories:**
 
-| Category | Container Types | Tracked Separately |
-|----------|----------------|-------------------|
+| Category | Container Types | Notes |
+|----------|----------------|-------|
 | **General** | Crates, shelves, cabinets, bags | Base capacity |
-| **Refrigerated** | Fridges, coolers | Perishable food shelf-life extended |
-| **Frozen** | Freezers | Frozen food; longest preservation |
+| **Refrigerated** | Fridges, coolers | Label only; actual PZ spoilage is Java-side |
+| **Frozen** | Freezers | Label only |
 
-Each category has a capacity (total item weight or slot count, TBD) tracked as a community score. When a category is full, specialists cannot deposit further output and log a warning.
+The scanner walks all objects in the indoor squares within `SCAN_RANGE` tiles of the bastion anchor square.
 
-**Item registry:**
-The settlement maintains a live registry of all items across all community containers. This enables:
-- Food projection (count calories across all food items)
-- Recipe validation (does the Cook have the required ingredients?)
-- Shortage detection (is the Defender running low on ammunition?)
-- Future: crafting queue, resource allocation per specialist
+### 8.2 Settler Water Pool
 
-The registry is rebuilt on each tick and cached. It does not require scanning every container in real time.
+Settlers manage their own water supply independent of the player's containers.  This is tracked in `rec.settlerWaterPool` — measured in settler-days of safe water.
 
-### 7.2 Kitchen Awareness
+**How the pool works:**
+- WaterCarrier role adds to the pool (requires: water source within `collectRadius`, heat source in bastion, pot in shared storage)
+- Roles that need water (Doctor, Farmer, Tailor) call `debitWater()` — if the pool is empty, their water-requiring step is skipped with a warning log
+- The pool is capped at `WATER_POOL_MAX` (21 days — a 3-week hard cap)
+- The pool is **separate from player containers** — settler roles never touch the water in the player's barrels or bottles
+- `rec.waterDays` displayed in the Overview = actual container water + settler pool
 
-The Cook specialist is aware of appliance locations (stoves, ovens, microwaves) within the settlement. On each tick:
-- Food items drift toward containers near cooking appliances
-- The Cook draws ingredients from the nearest appropriate container first
-- Over time, food naturally congregates in the kitchen without player intervention
+**World-state cache:**  Whether a water source and heat source exist is expensive to scan every day.  Results are cached in `rec.cachedWaterSource` and `rec.cachedHeatSource` and refreshed every 7 in-game days.  Infrastructure status is shown in the Overview tab so the player can see why WaterCarrier isn't working.
 
-This creates emergent organization. The player doesn't need to manually sort the pantry — it happens as a byproduct of the Cook working.
+**WaterCarrier yield formula:**
+```
+produced = WATER_PER_CARRIER_TICK + (settler.skillLevel - 1) * WATER_CARRIER_SKILL_MOD
+         = 2.0 + (skillLevel - 1) * 0.3   settler-days per tick
+```
 
-> ⚑ OPEN: "Drift" is a soft mechanic that moves items between containers on the tick. Needs to be bounded so it doesn't move everything to one spot or create annoying surprises for the player.
+### 8.3 Virtual Yield System
 
-### 7.3 Private Container Flagging
+Settlers produce output that is tracked in `rec.virtualYield` — a key/value table accumulating pending production.  This is a Phase 2 tracking system; physical item spawning is Phase 3.
 
-- Right-click any container inside the settlement → "Mark as Private"
+**Current virtual yield keys:**
+
+| Key | Description | Produced By |
+|-----|-------------|-------------|
+| `thread` | Thread units (picked from rags) | Tailor |
+| `bandages` | Sterilized bandages | Doctor |
+| `meals` | Prepared meals (count) | Cook |
+| `fish` | Fresh fish | Fisher |
+| `meat` | Trap/hunt catch | Trapper, Hunter |
+| `planks` | Sawn planks | Woodcutter |
+| `firewood` | Firewood loads | Woodcutter |
+| `ingots` | Metal ingots | Blacksmith |
+| `eggs` | Eggs | Rancher |
+| `milk` | Milk units | Rancher |
+| `savedSeeds` | Seeds reserved for replanting | Farmer |
+
+All yield entries are capped by the role's `max*` setting.  Once a cap is reached, the settler logs "stock at cap" and stops consuming the input resource.
+
+**Phase 3: Claiming yield** — a "Collect Production" action in the Bastion Window will spawn the accumulated virtual yield as actual items into a designated output container in the settlement.  The exact item type strings and container targeting logic are deferred to Phase 3 design.
+
+### 8.4 Kitchen Awareness (Phase 3)
+
+The Cook specialist will be aware of appliance locations (stoves, ovens) within the settlement.  Food items drift toward containers near cooking appliances over time.  The player doesn't need to manually sort the pantry.
+
+> ⚑ OPEN: "Drift" is a soft mechanic.  Needs bounds so it doesn't move everything to one spot.  See Open Question #2.
+
+### 8.5 Private Container Flagging
+
+- Right-click any container inside the settlement → "Mark as Private" / "Mark as Shared"
 - Private containers are invisible to the simulation; specialists never draw from them
-- Player's personal stash, emergency reserves, items in-progress — these stay private
-- UI indicates private vs. community ownership on container inspect
+- Persists across sessions via `rec.privateContainers[objKey] = true`
 
-### 7.4 Food Management
+### 8.6 Food Management
 
-- **Spoilage priority toggle:** Cook uses nearly-spoiled food first
-- **Food projection:** Bastion Window Overview tab shows days remaining at current consumption
-- **Balanced diet:** Cook attempts variety; monotonous diet incurs Happiness penalty
-
-### 7.5 Water
-
-- Rain barrels as primary collection
-- Consumption tracked per tick
-- Shortage: Cook and Doctor lose effectiveness
-- Days remaining shown in Bastion Window Overview tab alongside food projection
+- Cook uses perishable food first (items with a positive `AgeDelta` or "fresh"/"raw" in type name)
+- `allowDryGoods = false` protects shelf-stable reserves by default
+- Food projection shown in Bastion Window Overview tab
 
 ---
 
 ## 9. Threats & Defense
 
-### 8.1 Noise Score
+### 9.1 Noise Score
 
-Settlement activity generates noise that attracts zombies. Noise is tracked as a discrete score with a player-configurable budget.
+Settlement activity generates noise that attracts zombies.  Noise is tracked as a discrete score with a player-configurable budget.
 
 **Noise contributors by role:**
 
 | Activity | Noise Level |
 |----------|------------|
-| General settlement presence | Low (always-on baseline) |
-| Woodcutter chopping | High |
-| Blacksmith hammering | Very High |
-| Mechanic (engine work) | Medium |
-| Defender using firearms | Very High (but intermittent) |
-| Defender using melee | Low |
-| Cooking, farming, tailoring | Minimal |
+| General settlement presence | +1 (always-on baseline) |
+| Woodcutter chopping | +3 |
+| Blacksmith hammering | +3 |
+| Mechanic (engine work) | +2 |
+| Defender patrol | +2 |
+| Hunter | +3 |
+| Cook, Farmer, Tailor, Rancher, WaterCarrier | 0 |
 
-When the noise score exceeds the player's set budget, the settlement tick suppresses the noisiest activities first and logs the skipped actions. This gives the player a lever to trade productivity for safety.
+When the noise score exceeds the player's set budget, the settlement tick suppresses the noisiest activities first and logs the skipped actions.
 
-### 8.2 Player Activity Controls
+**Noise budget levels:**
 
-The player can configure what the settlement is and isn't allowed to do:
+| Level | Budget |
+|-------|--------|
+| Silent | 1 |
+| Quiet | 3 |
+| Normal | 6 |
+| Loud | 12 |
 
-- **Noise budget:** Tiered preset (Silent / Quiet / Normal / Loud). Constrains which specialist activities run on a given tick.
-- **Firearms toggle:** Allow or prohibit Defenders from using guns. Melee-only mode reduces noise significantly at the cost of Defender effectiveness.
-- **Time restrictions:** Noisy work (chopping, smithing) restricted to daylight hours only.
-- **Individual role suspend:** Pause any specialist role entirely.
+### 9.2 Player Activity Controls (Settings Tab)
 
-All of these controls live in the **Settings tab** of the Bastion Window. They persist and are adjustable at any time. They are not "quests" or "upgrades" — they're configuration.
+- **Noise budget:** Silent / Quiet / Normal / Loud
+- **Firearms toggle:** Allow / Melee-only (Phase 4)
+- **Noisy work hours:** Unrestricted / Daylight only (Phase 4)
+- **Per-role suspend:** Pause any specialist entirely (Phase 4)
+- **Per-role settings:** `maxThread`, `allowDryGoods`, `scrapFloor`, etc. (Phase 3 UI; currently via admin command)
 
-### 8.3 Ambient Sounds
+### 9.3 Ambient Sounds (Phase 4)
 
-When specialist activities run on the tick, **real in-game sounds play at the settlement location**. The player hears log chopping if the Woodcutter worked. They hear a distant gunshot if the Defender engaged. These sounds exist in 3D space — audible from outside the settlement, louder when nearby.
+When specialist activities run on the tick, real in-game sounds play at the settlement location.  The player hears log chopping if the Woodcutter worked.  These sounds exist in 3D space.
 
-This creates the illusion of an active community without requiring visible NPCs performing animations. The sounds *are* the evidence.
-
-The sounds also reinforce the noise score — the player can literally hear when the settlement is being loud.
-
-> See Section 12 for the open question about NPC physical representation and why ambient sound is load-bearing.
-
-### 8.4 Zombie Attraction
+### 9.4 Zombie Attraction (Phase 5)
 
 - Noise score is the primary zombie attraction driver
-- Population size adds a baseline scent/presence attractant
-- Defenders reduce effective threat by handling wanderers before they trigger events
-- Attraction is reduced when activity controls are restricted
-
-### 8.5 Threat Events
-
-| Tier | Description | Resolution |
-|------|-------------|------------|
-| Probe | Small group drawn to perimeter | Defenders handle automatically |
-| Incursion | Larger group | Defenders engage; may need player support |
-| Horde | Serious threat | Requires player; may damage structures |
-
-Predictable escalation: the player knows the horde is building and can prepare.
-
-### 8.6 Loot & Cleanup
-
-- Defenders or general settlers clean nearby corpses on the tick
-- Uncleaned corpses create a Health and Happiness penalty over time
-- Looted gear from kills goes into community inventory
+- Threat event tiers: Probe → Incursion → Horde
+- Defenders handle probes automatically; incursions and hordes require player involvement
 
 ---
 
@@ -414,53 +472,36 @@ Predictable escalation: the player knows the horde is building and can prepare.
 
 ### 10.1 Design Principle
 
-Almost everything lives in one window. Status checks, log entries, settler roster, scores, and settings are all in the Bastion Window — a single tabbed panel that replaces the previous HUD overlay and scattered right-click menus. The right-click menu is kept deliberately thin; it exists only to open the window, not to replace it.
+Everything lives in one window.  Status checks, log entries, settler roster, scores, and settings are all in the Bastion Window — a single tabbed panel.  The right-click menu is deliberately thin; it exists only to open the window, not to replace it.
 
 ---
 
 ### 10.2 The Bastion Window
 
-A resizable, draggable tabbed panel. Built on `ISTabPanel` inside an `ISCollapsableWindow`. Opens whenever the player initiates contact with the bastion.
+A draggable tabbed panel.  Built on `ISTabPanel` inside a custom `ISPanel` with title-bar drag handling.  Auto-refreshes every ~5 seconds while open.
+
+**Implementation notes:**
+- `BastionWindow` extends `ISPanel` with manual drag via `onMouseDown`/`update()` and `getMouseX()`/`getMouseY()`
+- `ISTabPanel:addView(name, panel)` positions each content panel at `y = tabHeight` automatically
+- Content panel height = `WIN_H - TITLE_H - TAB_H = 376px`
+- Close button uses colon-syntax ISButton callback where `self = target = the window`
 
 #### Tabs
 
 **Overview**
-The current state of the settlement at a glance. Community scores (Food, Water, Noise, Health, Defense, Storage, Happiness, Resolve, Education) with contributor breakdowns directly below each score — the same format described in Section 5.3. The player should never have to ask why a score is moving.
+Settlement status at a glance.  Currently shows:
+- Settlers count, Food days, Water days (with settler pool breakdown), Noise score/budget
+- Infrastructure flags: water source found/not found, heat source found/not found, animals detected
+- Settler production (virtual yield) — pending items accumulated since last claim
+- Last 3 log entries
 
-```
-OVERVIEW
-────────────────────────────────────
-Food: 8 days  [OK]
-  + Rosa cooking (reduces waste)       +1 day
-  - 6 settlers consuming               -0.8/day
-
-Noise: 4 / 6  [OK]
-  + Woodcutter active                  +3
-  + General settlement activity        +1
-  - Quiet mode: gunshots restricted    -0
-
-Resolve: 41  [~]
-  + Successful defense (3 days ago)    +6
-  - Marcus died                        -18
-```
+*Phase 3 target: contributor breakdown below each score.*
 
 **Settlers**
-Full roster of every current settler. Each row: name, role, mood indicator, skill level. Clicking a settler expands their profile inline — backstory seed, trait tag, current mood details, and days at the settlement. No separate screen; expand/collapse in the list.
-
-```
-SETTLERS  (6)
-────────────────────────────────────
-▶ Rosa Flores       Cook        ★★★  Content
-▼ Marcus Webb       Woodcutter  ★★   Struggling
-    Army Veteran from Muldraugh who watched their town fall.
-    Trait: Hard Worker
-    Mood: Struggling — hasn't been eating well. Day 14 here.
-  James Kim         Farmer      ★    Content
-  ...
-```
+Full roster.  Each row: name, role, mood, skill level.  Clicking a row shows settler profile inline (backstory, trait, mood detail).
 
 **Log**
-The full settlement log. Chronological, newest first. Color-coded by entry type:
+Full settlement log, scrollable.  Color-coded by entry type:
 
 | Color | Type |
 |-------|------|
@@ -468,74 +509,50 @@ The full settlement log. Chronological, newest first. Color-coded by entry type:
 | Yellow | Warning / shortage |
 | Red | Death / critical event |
 | Green | Arrival / milestone |
+| Purple | Admin log entry |
 | Gray | Suppressed activity (noise budget) |
 
-Scrollable. Persists across sessions. Max 100 entries (oldest pruned).
+Newest entries at bottom (scroll-to-bottom on open).  Max 200 entries; oldest pruned.
 
 **Settings**
-All player-facing controls for settlement behavior:
+- Noise Budget buttons (Silent / Quiet / Normal / Loud) — active level highlighted
+- Disband Bastion (two-step: first click shows Confirm button; confirm sends CollapseBastion)
 
-- **Noise Budget:** Silent / Quiet / Normal / Loud (tiered preset; see Section 9.2)
-- **Firearms:** Allow / Melee-only (Defenders)
-- **Noisy work hours:** Unrestricted / Daylight only
-- **Per-role suspend:** Toggle any specialist role on or off entirely
-- **Disband Bastion:** Confirmation button at the bottom of this tab. Requires a second click on "Confirm Disband." Removes all settlers, clears ModData, closes the window.
-
-Disband is intentionally buried here — it's a serious action that should require navigating to it, not something reachable from a stray right-click.
+*Phase 3 target: per-role settings UI (maxThread, allowDryGoods, etc.) as editable fields.*
+*Phase 4 target: firearms toggle, time restriction, per-role suspend.*
 
 ---
 
 ### 10.3 Right-Click Menu
 
-Kept minimal. The window is the interface; the right-click is just the entry point.
-
 **Anywhere inside the bastion (no bastion exists):**
-- `Establish Bastion` — creates the settlement, then immediately opens the Bastion Window.
+- `Establish Bastion` — creates the settlement; opens Bastion Window immediately.
 
 **Anywhere inside the bastion (bastion exists):**
-- `Check on Bastion` — opens the Bastion Window.
+- `Check on Bastion` — opens/toggles the Bastion Window.
 
 **On a container inside the bastion:**
-- `Mark as Private` / `Mark as Shared` — toggles community/private ownership.
+- `Mark as Private` / `Mark as Shared`
 
 **On a settler mannequin:**
-- One-liner dialogue (mood-appropriate ambient flavor). No submenu. No structured report.
+- One-liner dialogue (mood-appropriate ambient flavor)
+- "View profile" — prints backstory/trait to chat
 
-That's the full right-click surface. Collapse, noise budget, role management, and disband are all inside the window.
-
----
-
-### 10.4 Radio Check-In
-
-When away from the settlement, the player can still open the Bastion Window remotely if either condition is met:
-
-- Player is carrying a **walkie-talkie with a working battery**, and the settlement has a **ham radio**
-- Player is standing at any **ham radio** (regardless of location)
-
-Right-click the walkie-talkie or ham radio → `Call Bastion`
-
-This opens the same Bastion Window. No separate UI. A brief flavor line appears at the top of the Overview tab to indicate it's a remote call:
-
-> *"Static, then a voice: 'Yeah, we're here. What do you need?'"*
-
-If the settlement has no ham radio, the option doesn't appear. If the player is out of range and has no walkie-talkie, the option doesn't appear. Range check uses tile distance (exact radio range simulation is unverified — see Section 2.2).
-
-**Critical events** can push an emergency notification to the player's screen even without them initiating a call — a one-line alert in the chat area:
-
-> `[Bastion] We're being overrun. Need you back here.`
-
-This is the only Bastion information that appears outside the window.
+That's the full right-click surface.  Noise budget, role management, and disband are inside the window.
 
 ---
 
-### 10.5 Minimal HUD (Optional / Reduced)
+### 10.4 Radio Check-In (Phase 2)
 
-With the Bastion Window consolidating all detailed information, the persistent HUD overlay is reduced to a single line or removed entirely. If kept, it shows only the most critical alerts:
+Right-click walkie-talkie or ham radio → `Call Bastion`.  Opens the same Bastion Window.  Available if player has a walkie-talkie with battery and the settlement has a ham radio, or player is standing at any ham radio.
 
-- Shortage warning (food < 3 days, water < 2 days)
-- Active threat level (incursion or horde only — probes handled silently)
+---
 
-Normal operational data (exact food days, noise score, settler count) lives in the window, not the HUD. The player doesn't need to see the numbers constantly — they need to see them when they check in.
+### 10.5 Critical Alerts
+
+The only Bastion information that appears outside the window: a one-line alert in the chat area for critical events.
+
+> `[Bastion] Food supply is running low (1.2 days remaining).`
 
 ---
 
@@ -543,529 +560,501 @@ Normal operational data (exact food days, noise score, settler count) lives in t
 
 ### 11.1 Philosophy
 
-Admin controls are split into two tiers by audience:
+- **Chat commands** — for server admins and hosts.  Gated on `getAccessLevel()`.
+- **Debug panel** — for the developer.  Gated on `isDebugEnabled()`.  Phase 4.
 
-- **Chat commands** — for server admins and hosts. Gated on `getAccessLevel()` (Admin or Moderator rank, or the singleplayer host). Match the mental model of PZ's own admin system, which is entirely command-based. Always available without special launch flags.
-- **Debug panel** — for the developer. Gated on `isDebugEnabled()` (requires `-debug` launch flag). A proper UI for operations that are too complex or tedious to type. Invisible to all players in normal use.
+### 11.2 Chat Commands (Implemented)
 
-Neither appears in the Bastion Window. Neither is accessible to regular players.
+All commands prefixed `/bastion`.  Server checks access level before executing.
 
----
-
-### 11.2 Chat Commands
-
-All commands are prefixed `/bastion`. The server-side handler checks access level before executing anything; unauthorized calls are silently ignored (no error surfaced to the caller).
-
-#### Settlement State
+#### Implemented
 
 | Command | Effect |
 |---------|--------|
-| `/bastion tick` | Force a settlement tick immediately, regardless of time of day |
-| `/bastion status` | Print current scores to the caller's chat (food, water, noise, settler count, threat) |
-| `/bastion reset` | Wipe the settlement record and re-establish in place (keeps building, clears all data) |
-| `/bastion collapse` | Full collapse — removes settlers and clears all data (same as Disband but from chat) |
+| `/bastion help` | Print available commands to server console |
+| `/bastion status` | Print settlement scores to server console |
+| `/bastion tick` | Force a tick on the next minute check |
+| `/bastion reset [username]` | Collapse a player's bastion |
+| `/bastion addlog <text>` | Append a milestone log entry |
 
-#### Scores & Resources
-
-| Command | Effect |
-|---------|--------|
-| `/bastion food <days>` | Set food days remaining (e.g. `/bastion food 14`) |
-| `/bastion water <days>` | Set water days remaining |
-| `/bastion noise <value>` | Set current noise score |
-| `/bastion score <name> <value>` | Set any named score directly (e.g. `/bastion score resolve 80`) |
-
-#### Settlers
+#### Planned (Phase 3+)
 
 | Command | Effect |
 |---------|--------|
-| `/bastion settler list` | Print all settlers (index, name, role, mood) to caller's chat |
-| `/bastion settler add [role]` | Generate and add a new settler, optionally with a specific role |
-| `/bastion settler remove <index>` | Remove a settler by their list index |
-| `/bastion settler mood <index> <state>` | Set a settler's mood (Content / Struggling / Critical) |
-| `/bastion settler role <index> <role>` | Reassign a settler's role |
+| `/bastion food <days>` | Set food days remaining |
+| `/bastion water <days>` | Set water days |
+| `/bastion settler list` | Print settler roster to console |
+| `/bastion settler add [role]` | Generate and add a settler |
+| `/bastion settler remove <index>` | Remove by index |
+| `/bastion settler mood <index> <state>` | Set mood |
+| `/bastion settler role <index> <role>` | Reassign role |
+| `/bastion threat <tier>` | Trigger a threat event |
+| `/bastion version` | Print mod version |
 
-#### Threat & Events
+### 11.3 Debug Panel (Phase 4)
 
-| Command | Effect |
-|---------|--------|
-| `/bastion threat <tier>` | Trigger a threat event (probe / incursion / horde) |
-| `/bastion threat clear` | Clear current active threat |
+Separate window, `Ctrl+Shift+B`, only renders if `isDebugEnabled()`.  Tabs: State (raw ModData), Scores (editable), Settlers (full edit), Tick (manual controls), Storage (inject items), Log (filtered view + clear).
 
-#### Utility
+### 11.4 Access Control
 
-| Command | Effect |
-|---------|--------|
-| `/bastion help` | Print available commands to caller's chat |
-| `/bastion version` | Print mod version and current data schema version |
-
----
-
-### 11.3 Debug Panel
-
-A separate window, opened with a keybind (default `Ctrl+Shift+B`). Only renders if `isDebugEnabled()` returns true — the keybind does nothing in normal play. Not documented in the Bastion Window or any player-facing UI.
-
-The panel is a raw diagnostic and manipulation tool. It does not need to be polished. It exists to save the developer from typing long command strings during testing.
-
-#### Tabs
-
-**State**
-Raw view of the current settlement ModData record — key/value display of everything stored. Read-only; useful for spotting corruption or unexpected values without opening the Lua console.
-
-**Scores**
-Editable fields for every community score. Input boxes with an Apply button. Faster than `/bastion score` for testing multiple thresholds in sequence.
-
-**Settlers**
-Full editable roster. Select any settler and modify name, role, mood, skill level, trait tag, or backstory inline. Add settler (with role picker). Remove settler. Useful for scripting specific test scenarios.
-
-**Tick**
-Manual tick controls: fire tick now, advance N days at once, set `lastTickDay` directly to simulate time jumps. Shows the exact sequence of role evaluations from the last tick with pass/fail status for each requirement check.
-
-**Storage**
-View the current item registry by category (general / refrigerated / frozen). Inject a named item into community storage. Clear a category. Useful for testing food projection and Cook tick behavior without needing to physically place items.
-
-**Log**
-Same as the main Bastion Window log tab, but with a "Clear log" button and an entry filter by type. Useful when the log is full of noise during rapid tick testing.
-
----
-
-### 11.4 Access Control Summary
-
-| Surface | Who Can Use It | Gate |
-|---------|---------------|------|
-| Chat commands | Host + Admin/Moderator rank | `getAccessLevel()` check server-side |
-| Debug panel | Developer only | `isDebugEnabled()` — requires `-debug` launch flag |
+| Surface | Who Can Use | Gate |
+|---------|------------|------|
+| Chat commands | Host + Admin/Moderator | `getAccessLevel()` server-side |
+| Debug panel | Developer | `isDebugEnabled()` |
 | Bastion Window | Any player with a bastion | No gate |
-| Right-click menu | Any player | No gate (options are context-sensitive) |
+| Right-click menu | Any player | Context-sensitive |
 
 ---
 
 ## 12. NPC Representation
 
-This is the hardest unsolved design question in the mod.
+### 12.1 The Problem
 
-### 10.1 The Problem
+Bastion's simulation is invisible.  Specialists work, the log records it — but if no physical NPCs are present, the settlement feels empty.
 
-Bastion's simulation is invisible. Specialists work, the log records it, sounds play — but if no physical NPCs are present, the settlement feels empty. And if physical NPCs are present but static (mannequins), it feels like a display window, not a community.
+### 12.2 Options
 
-The tension: we need the settlement to feel *inhabited*, but fully animated NPCs with real AI and pathfinding is a massive technical undertaking that goes far beyond the scope of this mod.
+**Option A: Mannequins (current)**  Proven.  Completely static.  Credible as a Phase 1 placeholder.
 
-### 10.2 Options Under Consideration
+**Option B: Mostly Indoors**  Settlers are implied rather than shown.  Sounds come from inside buildings.
 
-**Option A: Mannequins (current)**
-- Proven. Each settler is a placed IsoMannequin with moddata.
-- Completely static. No movement. No animation. Looks like a shop.
-- Credible as a placeholder for Phase 1. Not credible long-term.
+**Option C: One Visible Spokesperson Per Building**  One mannequin near each building entrance.  Sounds come from inside.
 
-**Option B: Mostly Indoors**
-- Assume settlers are always inside buildings. Don't render them externally.
-- Sounds come from inside the building (muffled chopping, talking, etc.).
-- Player interaction happens by entering buildings or via right-click on the building itself.
-- Sidesteps the representation problem entirely — settlers are *implied* rather than shown.
-- Precedent: many colony-sims (Frostpunk, etc.) use workers that are barely visible and never individually tracked.
+**Option D: Wait for B42 NPC System**  The developers are building this for B43.
 
-**Option C: One Visible Spokesperson Per Building**
-- One mannequin (or IsoObject) near the entrance of each occupied building represents whoever is inside.
-- Sounds come from the building. The visible figure is a stand-in, not an individual.
-- Reduces the number of objects to render; keeps *some* visible presence outside.
-- Interaction is with the building/spokesperson, not with named individuals directly.
+**Option E: Modified IsoZombie**  Fragile; not recommended.
 
-**Option D: Wait for B42 NPC System**
-- The developers are actively working on a native NPC system for B42.
-- If it matures, Bastion settlers could eventually be implemented as real PZ NPCs.
-- Risk: timeline unknown. Designing for this now may waste effort.
+### 12.3 Current Recommendation
 
-**Option E: Zombies with Restricted AI**
-- Settlers implemented as modified IsoZombie instances with tagged moddata.
-- Movement and "presence" built-in. Could be partially working already.
-- Fragile. Zombie AI is not designed for friendly NPCs. High maintenance.
-- Previous attempts in the mod hit tagging and interaction problems.
+**Option A (mannequins) for Phase 1–2.  Option B+C for Phase 3.**
 
-### 10.3 Current Recommendation
-
-**Option B (mostly indoors) for Phase 1–2, with Option C for the one primary contact per building.**
-
-The settlement log and ambient sounds carry the simulation. Physical presence is secondary. Start with one visible figure per building entrance as the interaction point, with sounds implying activity inside. Revisit when B42 NPC systems mature.
+One mannequin per settler for now.  When B42's ambient sound API is confirmed, switch to one spokesperson per building with sounds implying activity inside.
 
 ---
 
 ## 13. Comparable Games & Borrowed Mechanics
 
-### State of Decay 2 — Primary Reference
-**Borrow:** Score breakdown UI with all contributors listed. Negative spiral mechanics. Outpost-as-resource-provider for expansion.
-**Avoid:** Roster management screen. Per-survivor morale tracking.
+**State of Decay 2 — Primary Reference**
+Borrow: Score breakdown UI with all contributors listed.  Negative spiral mechanics.
+Avoid: Roster management screen.  Per-survivor morale tracking.
 
-### This War of Mine — Emotional Reference
-**Borrow:** Named characters with trait tags make death land. One arrival log entry does more work than a stats screen.
-**Avoid:** Per-character sympathy system (punishing snowball). Morale as moral enforcement.
+**This War of Mine — Emotional Reference**
+Borrow: Named characters with trait tags make death land.  One arrival log entry does more work than a stats screen.
+Avoid: Per-character sympathy system.
 
-### 7 Days to Die — Threat Escalation
-**Borrow:** Predictable horde cycle. Tension through anticipation, not randomness.
+**7 Days to Die — Threat Escalation**
+Borrow: Predictable horde cycle.  Tension through anticipation, not randomness.
 
-### Dwarf Fortress / RimWorld — Passive Simulation
-**Borrow:** Storytelling through log — you read what happened, imagination fills the gap. Tick-cycle specialists. Mood as emergent story.
-**Avoid:** Complexity ceiling. Every Bastion system should be understood in one session.
+**Dwarf Fortress / RimWorld — Passive Simulation**
+Borrow: Storytelling through log — you read what happened, imagination fills the gap.
+Avoid: Complexity ceiling.
 
-### Frostpunk — Minimal NPC Visibility
-**Borrow:** Workers exist and matter narratively, but you rarely see individuals. The simulation is legible without individual visibility. Sounds and activity indicators substitute for animation.
+**Frostpunk — Minimal NPC Visibility**
+Borrow: Workers exist and matter narratively, but you rarely see individuals.
 
 ---
 
 ## 14. Implementation Phases
 
-> **Current status:** Proof of concept. Right-click context menu works, Establish Bastion sends server commands, a mannequin spawns, and a basic log panel and HUD overlay exist. Phase 1 is being reworked to replace the HUD overlay and standalone log panel with the unified Bastion Window.
-
-### Phase 1 — Foundation
-- Settlement boundary (safehouse property integration + validation)
-- Settler spawning: placed NPCs in settlement, persist across sessions
-- NPC generation: name, role, skill level, one trait tag, backstory seed
-- Community storage: opt-out container system, item registry
-- Storage categories: general, refrigerated, frozen
-- Settlement tick: once-per-day cycle, basic log output
-- **Bastion Window** (tabbed): Overview tab with scores, Log tab, Settlers tab, Settings tab
-- Food and water tracking displayed in Overview tab
-- Noise score tracking with player budget control via Settings tab
-- Admin chat commands (`/bastion` prefix, host/admin gated)
-
-### Phase 2 — First Specialists
-- Cook: warm meal production, kitchen awareness, Happiness score
-- Woodcutter: log/plank production, fuel reserve, noise output
-- Farmer: crop tending, harvest, seasonal behavior
-- Trapper and Fisher: passive food supplementation
-- Settler mood states (reflected in Settlers tab)
-- Arrival log entries with backstory seeds
-- Radio check-in (walkie-talkie + ham radio opens Bastion Window remotely)
-- Resolve score
-- Ambient sounds: chopping, cooking activity
-- Debug panel (developer-only, `isDebugEnabled()` gated)
-
-### Phase 3 — Community Depth
-- Doctor, Teacher, Tailor, Forager, Mechanic specialists
-- Education score and library mechanic
-- Balanced diet and spoilage priority
-- Death weight (log uses names and trait tags)
-- Quest-gated recruitment (Doctor, Teacher)
-- Settler defection at zero Resolve
-- Skill advancement over time
-
-### Phase 4 — Threat & Endgame
-- Defender, Scout, Soldier, Hunter specialists
-- Zombie attraction scaling
-- Threat event tiers with ambient sound cues
-- Firearms toggle and time-restriction controls (Settings tab)
-- Blacksmith (Education-gated, B42 smithing integration)
-- Carpenter, Electrician, Welder specialists
-- Self-sufficiency milestone tracking
-- Settlement expansion mechanics
+> **Workflow reminder:** Design and test plan for each phase are written before implementation begins.  This document is updated immediately when a design decision changes during implementation.
 
 ---
 
-## 15. Phase 1 Test Plan
+### Phase 1 — Foundation ✅ COMPLETE
 
-These are manual in-game tests. Each test has a precondition, numbered steps, and a pass condition. Run them in order — later tests assume earlier ones passed. All tests use a fresh single-player save with Bastion enabled.
+**Goal:** Prove the core loop works end-to-end.
 
-> **Legend:** ✅ Pass | ❌ Fail | ⚠ Partial / needs investigation
+- [x] Settlement boundary (SCAN_RANGE tile radius from anchor square)
+- [x] Settler spawning: IsoMannequin placed at establish, removed at collapse, persists across sessions
+- [x] NPC generation: name, role, skill level, trait tag, backstory seed
+- [x] Community storage: opt-out container system, item registry (general / refrigerated / frozen)
+- [x] Settlement tick: once-per-day via `EveryOneMinute`, `lastTickDay` guard
+- [x] **Bastion Window** (ISTabPanel): Overview, Settlers, Log, Settings tabs
+- [x] Food and water tracking displayed in Overview
+- [x] Noise score with player budget control (Silent / Quiet / Normal / Loud) via Settings tab
+- [x] Admin chat commands (`/bastion help/status/tick/reset/addlog`)
+- [x] Right-click: Establish Bastion (opens window) / Check on Bastion
+- [x] Container mark-private / mark-shared via right-click
+- [x] ModData persistence across save/load
+- [x] Kahlua compatibility: no goto, no Java exception in nutrition chain, no OnModDataTransmit
 
 ---
 
-### Group 1 — Bastion Establishment
+### Phase 2 — Settler Purpose: Tedium Reduction 🔄 IN PROGRESS
+
+**Goal:** Make settlers meaningfully take over B42 grind tasks.  Every role has concrete output, resource floors, and clear failure logging.
+
+#### Implemented ✅
+
+- [x] **Settler water pool** (`rec.settlerWaterPool`): separate from player containers, capped at 21 days
+- [x] **WaterCarrier role**: collect + boil water; requires water source + heat source + pot; skill-scaled yield
+- [x] **Per-role settings** (`rec.roleSettings` initialized from `ROLE_SETTINGS_DEFAULTS`; `Bastion.getSetting()` helper)
+- [x] **Virtual yield system** (`rec.virtualYield`; `Bastion.addVirtualYield()` with cap)
+- [x] **`SetRoleSetting` client command** (validated against known keys)
+- [x] **World-state cache**: `hasWaterSource`, `hasHeatSource`, `hasAnimals` scan on establish and every 7 days; shown in Overview
+- [x] **Resource-floor-aware role ticks:**
+  - Tailor: washes dirty rags (water pool), picks thread up to `maxThread` cap
+  - Doctor: sterilizes bandages up to `maxBandages`; prorates batch when water is short; requires heat source
+  - Cook: perishables-first ordering; respects `allowDryGoods = false`; auto-sizes meals to settler count + 1
+  - Farmer: costs 1 water-day; saves seed fraction before reporting
+  - Woodcutter: respects `maxPlanks`; secondary fire-stoking if `keepFiresLit`
+  - Fisher: requires bait + fishing line from storage; respects `maxFishStock`
+  - Blacksmith: scrap → ingots; never touches `scrapFloor` reserve; requires heat source; skill-gated throughput
+  - Rancher: detects `IsoAnimal`; grain floor prevents feed depletion; produces eggs/milk yield
+  - Mechanic: generator refueling (skill 1) + vehicle parts check (skill 3)
+  - Trapper: bait check before reporting catch (abstract yield for now)
+- [x] Overview tab: water pool breakdown, infrastructure flags, virtual yield display
+
+#### Remaining Phase 2 Work 📋
+
+- [ ] **Role settings UI** in Settings tab: editable fields for `maxThread`, `allowDryGoods`, `scrapFloor`, etc.  Currently only settable via admin command.
+- [ ] **Teacher reading speed multiplier**: client-side `Events.OnTick` hook; modify book reading timer when `rec.teacherActive = true` and player is inside bastion.  Exact API unverified — see Open Question #20.
+- [ ] **Trapper trap scanning**: scan for actual `IsoTrap` objects in a ring *outside* the bastion radius.  Distance affects tick cost.  Phase 2 design below.
+- [ ] **Phase 2 test plan execution** (see Section 15.2)
+
+#### Trapper Trap Scanning Design
+
+Traps must be placed **outside** the bastion's indoor zone to work (you don't trap your own living space).
+
+- Scan for `IsoTrap` objects in a ring from `min(15 tiles)` to `trapRadius (60)` from anchor square
+- Each trap within range is "checked" — roll yield based on settler skill + trap type
+- Traps beyond 40 tiles cost 2 action points; settler has a daily pool of `4 + skillLevel` action points
+- Unchecked traps are noted in the log
+- Rebaiting: consume worms/berries/corn from shared storage per reset trap
+- Result goes to `rec.virtualYield.meat`
+
+---
+
+### Phase 3 — Production Claiming & Score Depth 📋 PLANNED
+
+**Goal:** Make settler output tangible; deepen score feedback.
+
+**Design decisions needed before implementation:**
+
+1. Virtual yield claiming: which container does output land in?  Options: nearest non-private container with space; a designated "settler output" container the player marks; the first container scanned.  Recommended: nearest non-private container with space, logged clearly.
+2. Item type strings: PZ item type names for thread (`Thread`), sterilized bandage (`BandageSterilized`?), ingot (`IronIngot`?).  Need verification against PZ B42 item registry.
+3. Settler skill advancement rate: once per N ticks where the role ran successfully.  N = 7 (once per week) as a starting point.
+
+**Scope:**
+
+- [ ] Virtual yield claiming: "Collect Production" action in Overview tab spawns yield as actual items
+- [ ] Score contributor breakdown in Overview (contributor table below each score)
+- [ ] Settler mood state triggers: food shortage → Struggling; prolonged Struggling → Critical; player interaction → improves
+- [ ] Death weight: death log entry uses name + trait tag
+- [ ] Settler arrival mechanics: new NPCs arrive based on Happiness / Resolve; arrival rate configurable
+- [ ] Skill advancement: settlers improve at their role over time
+- [ ] Teacher reading speed multiplier (if API confirmed)
+- [ ] Kitchen awareness: food drift toward cooking appliances
+- [ ] Expanded admin commands: `/bastion settler list/add/remove/mood/role`, `/bastion food/water`
+- [ ] Phase 3 test plan (to be written before implementation)
+
+---
+
+### Phase 4 — Community Life & Ambient Presence 📋 PLANNED
+
+**Design decisions needed:**
+
+1. Ambient sound trigger: on tick fire, or independent of tick on a random timer?  Tick-triggered is simplest.
+2. Radio check-in range: tile distance check or try PZ's radio frequency API?  Start with tile distance.
+3. Per-role suspend: add to Settings tab as toggle buttons.
+
+**Scope:**
+
+- [ ] Ambient sounds: chopping, cooking, hammering, patrol sounds at settlement location
+- [ ] Radio check-in via walkie-talkie / ham radio (opens Bastion Window remotely)
+- [ ] Quest-gated specialist recruitment (Doctor, Teacher, Blacksmith)
+- [ ] Settler defection at zero Resolve
+- [ ] Per-role suspend in Settings tab
+- [ ] Firearms toggle for Defenders
+- [ ] Noisy work hours (daylight-only mode)
+- [ ] Debug panel (developer-only, `isDebugEnabled()` gated)
+- [ ] Phase 4 test plan (to be written before implementation)
+
+---
+
+### Phase 5 — Threats, Defense & Endgame 📋 PLANNED
+
+**Scope:**
+
+- [ ] Zombie attraction scaling from noise score
+- [ ] Threat event tiers: Probe → Incursion → Horde
+- [ ] Defender, Scout, Soldier, Hunter specialist ticks
+- [ ] Threat event ambient sound cues
+- [ ] Self-sufficiency milestone tracking (five-pillar completion)
+- [ ] Settlement expansion mechanics
+- [ ] Multiplayer: tick behavior with multiple player bastions
+- [ ] Phase 5 test plan (to be written before implementation)
+
+---
+
+## 15. Test Plans
+
+> **Legend:** ✅ Pass | ❌ Fail | ⚠ Partial  
+> Tests are run in order within each group; later tests assume earlier ones passed.
+
+---
+
+### 15.1 Phase 1 Test Plan
+
+All tests use a fresh single-player save with Bastion enabled.
+
+#### Group 1 — Bastion Establishment
 
 **T1.1 — Establish Bastion in a building**
-- *Precondition:* Player is inside a building. No bastion exists.
-- Steps:
-  1. Right-click inside the building.
-  2. Select "Establish Bastion."
-- *Pass:* Option appears in the context menu. Clicking it does not produce an error. Console prints a confirmation.
+- *Pre:* Player inside a building.  No bastion exists.
+- *Steps:* Right-click inside → "Establish Bastion."
+- *Pass:* Option appears.  No error.  Console confirmation.  Bastion Window opens.
 
 **T1.2 — Cannot establish a second bastion**
-- *Precondition:* T1.1 passed. A bastion exists.
-- Steps:
-  1. Right-click inside a different building.
-- *Pass:* "Establish Bastion" does not appear. "Check on Bastion" appears if inside the bastion building.
+- *Pre:* T1.1 passed.
+- *Steps:* Right-click inside a different building.
+- *Pass:* "Establish Bastion" absent.  "Check on Bastion" present if inside the bastion building.
 
-**T1.3 — Disband Bastion removes it**
-- *Precondition:* T1.1 passed. Player is inside their bastion.
-- Steps:
-  1. Right-click inside the bastion → "Check on Bastion."
-  2. Navigate to the Settings tab.
-  3. Click "Disband Bastion," then confirm.
-  4. Right-click inside the same building again.
-- *Pass:* "Establish Bastion" reappears. World ModData for this player is cleared.
+**T1.3 — Disband removes bastion**
+- *Pre:* T1.1 passed, player inside bastion.
+- *Steps:* "Check on Bastion" → Settings → "Disband Bastion" → Confirm.  Right-click same building.
+- *Pass:* "Establish Bastion" reappears.  ModData cleared.
 
-**T1.4 — Bastion persists across save and load**
-- *Precondition:* T1.1 passed.
-- Steps:
-  1. Save and quit.
-  2. Load the same save.
-  3. Right-click inside the bastion building.
-- *Pass:* "Check on Bastion" appears (not "Establish Bastion"). The bastion record survived the reload.
+**T1.4 — Bastion persists across save/load**
+- *Pre:* T1.1 passed.
+- *Steps:* Save, quit, load.  Right-click inside bastion.
+- *Pass:* "Check on Bastion" appears.  Record intact.
 
----
+#### Group 2 — Settler Spawning & Persistence
 
-### Group 2 — Settlement Boundary
+**T2.1 — Establishing spawns a settler**
+- *Steps:* Establish bastion, look inside.
+- *Pass:* At least one mannequin present.  Arrival entry in Log tab.
 
-**T2.1 — Safehouse boundary is recognised**
-- *Precondition:* Player has claimed a safehouse via PZ's vanilla UI (Esc → Safehouse). T1.1 passed inside that same building.
-- Steps:
-  1. Open the console. Run a debug print of `SafeHouse.getSafehouseContaining(player:getSquare())`.
-- *Pass:* Returns a non-nil safehouse object. The bastion's stored boundary matches the safehouse tiles.
+**T2.2 — Settler persists across save/load**
+- *Steps:* Note position, save, load.
+- *Pass:* Mannequin at same position.  Name and role unchanged.
 
-**T2.2 — Containers inside the boundary are in scope**
-- *Precondition:* T2.1 passed.
-- Steps:
-  1. Place a crate inside the safehouse boundary.
-  2. Trigger a manual tick (or advance one in-game day).
-  3. Check the settlement log.
-- *Pass:* The crate appears in the community storage inventory count. Log reflects correct item totals.
+**T2.3 — Collapse removes settlers**
+- *Steps:* Collapse bastion, check building.
+- *Pass:* Mannequins removed.  No orphans.
 
-**T2.3 — Containers outside the boundary are ignored**
-- *Precondition:* T2.2 passed.
-- Steps:
-  1. Place a crate one tile outside the safehouse boundary.
-  2. Put a distinctive item (e.g., a single baseball bat) in it.
-  3. Trigger a tick.
-- *Pass:* The item does not appear in the community item registry. Storage totals do not include it.
+#### Group 3 — NPC Generation
 
----
+**T3.1 — Settler has a name**
+*Pass:* First + last name shown in Settlers tab.  Not nil or blank.
 
-### Group 3 — Settler Spawning & Persistence
+**T3.2 — Settler has a role**
+*Pass:* A role name assigned (Cook / Woodcutter / Farmer / etc.).
 
-**T3.1 — Establishing a bastion spawns a settler**
-- *Precondition:* Fresh save, no bastion.
-- Steps:
-  1. Establish a Bastion (T1.1).
-  2. Look around the building interior.
-- *Pass:* At least one NPC (mannequin or other representation) is present inside the building. A settler arrival entry appears in the settlement log.
+**T3.3 — Settler has a trait tag**
+*Pass:* One tag listed in arrival log and Settlers tab profile.
 
-**T3.2 — Settler persists across save and load**
-- *Precondition:* T3.1 passed.
-- Steps:
-  1. Note the settler's position.
-  2. Save and quit.
-  3. Load the save.
-- *Pass:* The settler is present at the same position. Their name and role are unchanged.
+**T3.4 — Settler has a backstory**
+*Pass:* One-line `[occupation] from [location] who [circumstance]` in arrival log.
 
-**T3.3 — Collapsing the bastion removes settlers**
-- *Precondition:* T3.1 passed.
-- Steps:
-  1. Collapse the bastion (T1.3).
-  2. Check the building interior.
-- *Pass:* Settler NPC objects are removed from the world. No orphaned mannequins remain.
+**T3.5 — Multiple settlers have distinct names**
+*Pass:* No two settlers share the same full name.
 
----
+#### Group 4 — Community Storage
 
-### Group 4 — NPC Generation
+**T4.1 — Containers default to shared**
+*Pass:* Containers inside boundary have no "Mark as Shared" needed; already shared.
 
-**T4.1 — Generated settler has a name**
-- *Precondition:* T3.1 passed.
-- Steps:
-  1. Open Bastion Window → Settlers tab, or check the Log tab arrival entry.
-- *Pass:* A first and last name is shown. It is not "nil," blank, or a placeholder.
+**T4.2 — Mark private excludes container**
+- *Steps:* "Mark as Private," add distinctive item, trigger tick.
+- *Pass:* Item absent from community totals.
 
-**T4.2 — Generated settler has a role**
-- *Precondition:* T4.1 passed.
-- Steps:
-  1. Check the settler's role in the Settlers tab or the arrival log entry.
-- *Pass:* A role name is assigned (e.g., "Cook," "Woodcutter," "Farmer"). Not blank.
+**T4.3 — Re-marking as shared restores it**
+- *Steps:* "Mark as Shared," trigger tick.
+- *Pass:* Item reappears in totals.
 
-**T4.3 — Generated settler has a trait tag**
-- *Precondition:* T4.1 passed.
-- Steps:
-  1. Check the arrival log entry for the settler.
-- *Pass:* One trait tag is listed (e.g., "Optimist," "Nervous"). Not blank.
+#### Group 5 — Settlement Tick
 
-**T4.4 — Generated settler has a backstory seed**
-- *Precondition:* T4.1 passed.
-- Steps:
-  1. Read the arrival log entry.
-- *Pass:* A one-line backstory in the format `[occupation] from [location] who [circumstance]` is present.
+**T5.1 — Tick fires once per day**
+- *Steps:* Note time, advance to next day, check Log tab.
+- *Pass:* New batch of tick entries for new day.  No duplicate entries.
 
-**T4.5 — Multiple settlers have distinct names and tags**
-- *Precondition:* At least two settlers have arrived.
-- Steps:
-  1. Compare names and trait tags across settlers.
-- *Pass:* Names differ. Trait tags may coincide occasionally (random) but should not be identical for every settler.
+**T5.2 — Tick produces role output**
+- *Pre:* Woodcutter with axe + logs in storage.
+- *Steps:* Advance one day, open Log tab.
+- *Pass:* Named Woodcutter entry with specific output.
 
----
+**T5.3 — Tick logs missing requirements**
+- *Pre:* Cook exists, no food in storage.
+- *Steps:* Advance one day.
+- *Pass:* Entry says Cook couldn't work and states reason.
 
-### Group 5 — Community Storage
+**T5.4 — Tick does not double-fire**
+- *Steps:* Save, quit, reload mid-day.  Advance to end of same day.
+- *Pass:* Exactly one tick batch for that day.
 
-**T5.1 — Community containers default to shared**
-- *Precondition:* T2.2 passed. A container exists inside the boundary.
-- Steps:
-  1. Inspect the container.
-- *Pass:* UI indicates it is community-owned (not private). No player action required to make it shared.
+#### Group 6 — Bastion Window
 
-**T5.2 — Marking a container private excludes it**
-- *Precondition:* T5.1 passed.
-- Steps:
-  1. Right-click a container → "Mark as Private."
-  2. Put a distinctive item in it.
-  3. Trigger a tick.
-- *Pass:* The item does not appear in the community item registry or storage totals. Log does not reference it.
+**T6.1 — Window opens with all four tabs**
+*Pass:* Overview, Settlers, Log, Settings all visible.  No Lua error.
 
-**T5.3 — Re-marking a private container as shared restores it**
-- *Precondition:* T5.2 passed.
-- Steps:
-  1. Right-click the private container → "Mark as Shared" (or toggle off Private).
-  2. Trigger a tick.
-- *Pass:* The item reappears in community storage totals on the next tick.
+**T6.2 — Log tab: newest entries at bottom**
+- *Pre:* Two days of entries.
+- *Pass:* Scroll to bottom shows most recent day.
 
-**T5.4 — Refrigerated containers tracked separately**
-- *Precondition:* A fridge exists inside the settlement boundary.
-- Steps:
-  1. Put food in the fridge.
-  2. Open Bastion Window → Overview tab.
-- *Pass:* Refrigerated storage shows a non-zero item count or weight distinct from general storage.
+**T6.3 — Log persists across save/load**
+*Pass:* All prior entries present after reload.
 
-**T5.5 — Frozen containers tracked separately**
-- *Precondition:* A freezer exists inside the settlement boundary.
-- Steps:
-  1. Put food in the freezer.
-  2. Open Bastion Window → Overview tab.
-- *Pass:* Frozen storage shows a non-zero value distinct from refrigerated and general.
+**T6.4 — Log color-coding correct**
+*Pass:* Standard = white; warning = yellow; arrival = green; suppressed = gray.
 
-**T5.6 — Storage capacity warning when full**
-- *Precondition:* Community storage exists.
-- Steps:
-  1. Fill all community containers to capacity.
-  2. Trigger a tick that would produce output (e.g., Woodcutter should add logs).
-- *Pass:* Log entry warns that storage is full and output was not deposited. Specialist did not silently discard output.
+**T6.5 — Settlers tab shows roster with profiles**
+*Pass:* Each settler has a row.  Clicking shows backstory, trait, mood.
+
+**T6.6 — Settings tab: noise budget buttons work**
+- *Steps:* Click "Silent," advance one day.
+- *Pass:* Noise budget is 1.  Woodcutter suppressed if noise would exceed it.
+
+#### Group 7 — Food, Water & Noise Display
+
+**T7.1 — Food days displayed**
+*Pass:* "Food: X days" visible with positive number.
+
+**T7.2 — Water days displayed**
+*Pass:* "Water: X days" visible.
+
+**T7.3 — Values change after tick**
+*Pass:* Values shift after advancing one day.
+
+**T7.4 — Shortage warning at threshold**
+- *Pre:* Food below 3 days.
+- *Pass:* Food metric in warning color.  Warning log entry.
+
+**T7.5 — Noise score displayed with budget**
+*Pass:* "Noise: X / Y [Level]" visible.
+
+**T7.6 — Noisy role increases noise score**
+- *Steps:* Assign Woodcutter, advance day.
+- *Pass:* Noise score reflects Woodcutter's +3 contribution.
+
+**T7.7 — Noise budget suppresses over-budget roles**
+- *Steps:* Set budget to Silent, advance day.
+- *Pass:* Woodcutter log entry is gray suppression notice.
 
 ---
 
-### Group 6 — Settlement Tick
+### 15.2 Phase 2 Test Plan
 
-**T6.1 — Tick fires once per in-game day**
-- *Precondition:* Bastion established, at least one settler with a role.
-- Steps:
-  1. Note current in-game time.
-  2. Sleep or wait through to the next day.
-  3. Check the settlement log.
-- *Pass:* A new batch of tick entries appears dated to the new day. No duplicate tick entries for the same day.
+Run after Phase 1 tests pass.  Requires: bastion established, at least one settler of each tested role.
 
-**T6.2 — Tick produces log output for each active role**
-- *Precondition:* T6.1 passed. At least one specialist with requirements met.
-- Steps:
-  1. Ensure a Woodcutter has an axe and wood is available.
-  2. Advance one day.
-  3. Open the settlement log.
-- *Pass:* A log entry for the Woodcutter's action appears with their name and a specific outcome (items collected or produced).
+#### Group 8 — Settler Water Pool
 
-**T6.3 — Tick logs a skip when requirements are not met**
-- *Precondition:* A Cook specialist exists. Remove all fuel from community storage.
-- Steps:
-  1. Advance one day.
-  2. Check the log.
-- *Pass:* An entry appears saying the Cook could not work and states the reason (no fuel). No crash. No silent skip.
+**T8.1 — Pool shown in Overview**
+- *Pre:* Bastion established.
+- *Pass:* Overview shows "Water: X.X days" (may show "0.0 from settler pool" initially).
 
-**T6.4 — Tick does not fire more than once per day**
-- *Precondition:* T6.1 passed.
-- Steps:
-  1. Save, quit, and reload mid-day.
-  2. Advance to end of that same in-game day.
-- *Pass:* Only one tick's worth of log entries appears for that day, not two. Reloading mid-day does not double-fire the tick.
+**T8.2 — WaterCarrier requires all three conditions**
+- *Test A:* Assign WaterCarrier with no water source nearby, advance day.
+  *Pass:* Log warns "no water source found nearby."
+- *Test B:* Add pond tile nearby (or confirm existing), but no heat source, advance day.
+  *Pass:* Log warns "no heat source."
+- *Test C:* Add campfire/stove, but no pot in storage, advance day.
+  *Pass:* Log warns "has no pot in shared storage."
 
----
+**T8.3 — WaterCarrier fills the pool when conditions met**
+- *Pre:* All three conditions met (water source + heat source + pot).
+- *Steps:* Assign WaterCarrier, advance day.
+- *Pass:* `rec.settlerWaterPool` increases by ~2.0 + skill bonus.  Log confirms with "pool" numbers.
 
-### Group 7 — Bastion Window & Log Tab
+**T8.4 — Pool shown in Overview with breakdown**
+- *Pre:* T8.3 passed.  Pool > 0.
+- *Pass:* Overview shows "X.X days (Y.Y from settler pool)" for water.
 
-**T7.1 — Bastion Window opens**
-- *Precondition:* Bastion established.
-- Steps:
-  1. Right-click inside the bastion → "Check on Bastion."
-- *Pass:* The Bastion Window opens without error. All four tabs are visible (Overview, Settlers, Log, Settings).
+**T8.5 — Pool capped at WATER_POOL_MAX**
+- *Steps:* Run WaterCarrier for enough ticks to fill pool.
+- *Pass:* Log says "water pool is full (21.0 days)."  Pool does not exceed 21.
 
-**T7.2 — Log tab shows entries, newest first**
-- *Precondition:* At least two days of tick entries exist.
-- Steps:
-  1. Open Bastion Window → Log tab.
-- *Pass:* The most recent day's entries appear at the top. Older entries are below.
+**T8.6 — Water-consuming role draws from pool**
+- *Pre:* Pool is non-zero.  Doctor role assigned.
+- *Steps:* Advance day.
+- *Pass:* Pool decreases by Doctor's water cost.  Doctor log shows successful sterilization.
 
-**T7.3 — Log persists across save and load**
-- *Precondition:* T7.2 passed. Several log entries exist.
-- Steps:
-  1. Save and quit.
-  2. Load the save.
-  3. Open Bastion Window → Log tab.
-- *Pass:* All prior log entries are still present. Nothing lost on reload.
+**T8.7 — Water-consuming role skips when pool empty**
+- *Pre:* Pool = 0 (never filled).  Doctor role assigned.
+- *Steps:* Advance day.
+- *Pass:* Doctor log warns "settler water supply too low."  No bandages produced.  Player containers unaffected.
 
-**T7.4 — Log color-coding is correct**
-- *Precondition:* Log contains at least one standard entry, one shortage/warning, and one arrival.
-- Steps:
-  1. Open Bastion Window → Log tab.
-- *Pass:* Standard tick entries are white. Shortage/warning entries are yellow. Arrival entries are green. Suppressed activity entries are gray.
+**T8.8 — Infrastructure flags in Overview**
+- *Pass:* "Water source: found / NOT FOUND" and "Heat source: found / NOT FOUND" shown in Overview.  Accuracy matches world state.
 
-**T7.5 — Settlers tab shows roster**
-- *Precondition:* At least one settler exists.
-- Steps:
-  1. Open Bastion Window → Settlers tab.
-- *Pass:* Each settler appears as a row with name, role, mood indicator, and skill level. Clicking a row expands their profile inline.
+#### Group 9 — Resource Floors & Caps
 
-**T7.6 — Settings tab contains activity controls**
-- *Precondition:* Bastion established.
-- Steps:
-  1. Open Bastion Window → Settings tab.
-- *Pass:* Noise budget options, firearms toggle, time restriction, and per-role suspend controls are all present. Disband button is present at the bottom.
+**T9.1 — Tailor respects maxThread cap**
+- *Pre:* Tailor role assigned.  Clean rags in storage.  `maxThread = 50`.
+- *Steps:* Advance days until thread stock hits 50.
+- *Pass:* Log says "thread stock is at cap (50). No rags consumed."  No further rags consumed.
 
----
+**T9.2 — Tailor log warns when at cap**
+*Pass:* Cap message is clearly logged (not a silent skip).
 
-### Group 8 — Food & Water (Overview Tab)
+**T9.3 — Doctor respects maxBandages cap**
+- *Pre:* All conditions met.  `maxBandages = 20`.
+- *Steps:* Advance days until stock hits 20.
+- *Pass:* Log says "bandage stock is at cap (20)."
 
-**T8.1 — Food days remaining is displayed**
-- *Precondition:* Community storage contains food. At least one settler is consuming food.
-- Steps:
-  1. Open Bastion Window → Overview tab.
-- *Pass:* A "Food: X days" metric is visible with a positive number and contributor breakdown below it.
+**T9.4 — Cook does not touch dry goods by default**
+- *Pre:* Storage contains only canned goods (no fresh food).  Cook role assigned.
+- *Steps:* Advance day.
+- *Pass:* Cook log warns "nothing suitable to cook (dry goods excluded by setting)."  Canned goods not consumed.
 
-**T8.2 — Water days remaining is displayed**
-- *Precondition:* Community storage contains water or a rain barrel is in the settlement.
-- Steps:
-  1. Open Bastion Window → Overview tab.
-- *Pass:* A "Water: X days" metric is visible.
+**T9.5 — Cook uses perishables first**
+- *Pre:* Storage contains both fresh vegetables and canned beans.
+- *Steps:* Advance day.
+- *Pass:* Cook log says meals prepared "from perishables."  Log count > 0 for perishable meals.
 
-**T8.3 — Values update after a tick**
-- *Precondition:* T8.1 and T8.2 passed. Note current values.
-- Steps:
-  1. Advance one in-game day.
-  2. Re-open Bastion Window → Overview tab.
-- *Pass:* Values have changed (decreased by approximately one day's consumption). Values do not stay static.
+**T9.6 — Farmer saves seeds by default**
+- *Steps:* Advance day with Farmer assigned.
+- *Pass:* Log mentions seeds set aside.  `rec.virtualYield.savedSeeds` > 0.
 
-**T8.4 — Shortage warning appears below threshold**
-- *Precondition:* Food supply is below 3 days' worth.
-- Steps:
-  1. Open Bastion Window → Overview tab. Also check the on-screen alert area.
-- *Pass:* Food metric is shown in warning color (yellow or red) in the Overview tab. A brief critical alert appears on screen even without the window open. A log entry flags the shortage.
+**T9.7 — Blacksmith does not touch scrapFloor reserve**
+- *Pre:* Storage has exactly `scrapFloor` (10) scrap items.  `scrapFloor = 10`.
+- *Steps:* Advance day.
+- *Pass:* Log warns "not enough scrap above floor."  No ingots produced.  Scrap count unchanged.
 
----
+**T9.8 — Blacksmith produces ingots when scrap exceeds floor**
+- *Pre:* Storage has 14 scrap items.  `scrapFloor = 10`, `SCRAP_PER_INGOT = 4`.
+- *Steps:* Advance day.
+- *Pass:* 1 ingot added to virtual yield.  Log confirms.  Scrap count decreases by 4.  10 items remain.
 
-### Group 9 — Noise Score
+**T9.9 — Woodcutter respects maxPlanks**
+- *Steps:* Advance days until planks hit 60.
+- *Pass:* Log says "plank stock at cap (60)."
 
-**T9.1 — Noise score is displayed**
-- *Precondition:* Bastion established.
-- Steps:
-  1. Open Bastion Window → Overview tab.
-- *Pass:* A noise metric is visible (e.g., "Noise: 3 / 6") with contributor breakdown.
+**T9.10 — Rancher skips when grain below floor**
+- *Pre:* Storage has exactly `minGrainReserve` (10) grain items.
+- *Steps:* Advance day.
+- *Pass:* Log warns "feed stock too low."  No yield produced.  Grain unchanged.
 
-**T9.2 — Active Woodcutter increases noise score**
-- *Precondition:* No specialists active. Note baseline noise. Assign a Woodcutter.
-- Steps:
-  1. Advance one day.
-  2. Check noise score.
-- *Pass:* Noise score is higher than baseline. Difference matches the Woodcutter's defined noise contribution.
+#### Group 10 — Virtual Yield
 
-**T9.3 — Noise budget suppresses over-budget activities**
-- *Precondition:* Woodcutter is active. Set noise budget to "Silent" via Bastion Window → Settings tab.
-- Steps:
-  1. Advance one day.
-  2. Open Bastion Window → Log tab.
-- *Pass:* Log contains a gray entry stating the Woodcutter's tick was skipped due to the noise budget. No logs or planks were added to storage.
+**T10.1 — Yield accumulates in Overview**
+- *Pre:* At least one production role running.
+- *Steps:* Advance several days.  Open Overview.
+- *Pass:* "Settler production (pending):" section shows non-zero values for relevant keys.
 
-**T9.4 — Removing noise budget restriction restores activity**
-- *Precondition:* T9.3 passed. Noise budget is still "Silent."
-- Steps:
-  1. Open Bastion Window → Settings tab. Set noise budget back to "Normal."
-  2. Advance one day.
-- *Pass:* Woodcutter tick runs. Logs or planks are added to storage. No suppression entry in log.
+**T10.2 — Yield persists across save/load**
+- *Steps:* Let yield accumulate, save, load.  Check Overview.
+- *Pass:* Yield values unchanged after reload.
+
+**T10.3 — Multiple roles accumulate yield independently**
+- *Pre:* Tailor (thread), Fisher (fish), Blacksmith (ingots) all assigned.
+- *Steps:* Advance days.
+- *Pass:* All three yield keys show values.
+
+#### Group 11 — Role Settings
+
+**T11.1 — SetRoleSetting command works**
+- *Steps:* Send `SetRoleSetting` with `role="Tailor"`, `key="maxThread"`, `val=25`.  Advance day.
+- *Pass:* Tailor stops at 25 thread.  Log confirms cap at 25.
+
+**T11.2 — Invalid key rejected**
+- *Steps:* Send `SetRoleSetting` with `key="notakey"`.
+- *Pass:* Server logs rejection.  `rec.roleSettings` unchanged.
+
+**T11.3 — Settings persist across save/load**
+- *Steps:* Set `maxThread = 25`, save, load.
+- *Pass:* `rec.roleSettings.Tailor.maxThread = 25` after reload.
 
 ---
 
@@ -1073,27 +1062,33 @@ These are manual in-game tests. Each test has a precondition, numbered steps, an
 
 | # | Question | Status | Notes |
 |---|----------|--------|-------|
-| 1 | PZ safehouse boundary constraints (size limits, multi-building) | Open | Validate in Phase 1 |
-| 2 | Container "drift" bounds — how aggressively do items migrate toward kitchens? | Open | Needs playtesting |
-| 3 | Illness spreading between settlers | Open | High drama, high complexity — defer to Phase 3 |
-| 4 | Zombie attraction scaling formula | Open | Calibrate during Phase 4 playtesting |
+| 1 | PZ safehouse boundary constraints (size limits, multi-building) | Open | Validate in Phase 1 testing |
+| 2 | Container "drift" bounds for kitchen awareness | Open | Phase 3 design; needs playtesting |
+| 3 | Illness spreading between settlers | Open | Phase 3; high drama, high complexity |
+| 4 | Zombie attraction scaling formula | Open | Calibrate during Phase 5 |
 | 5 | Quest system scope for specialist recruitment | Open | Fixed locations acceptable for v1 |
 | 6 | Horde event structural damage to settlement | Open | Large scope increase if yes |
-| 7 | Score threshold values and decay rates | Open | Balance pass after Phase 2 |
-| 8 | Multiplayer: tick behavior and scores with multiple players | Open | B42 MP implications significant; defer |
-| 9 | Balanced diet tracking — per food type or per food group? | TBD | Food group simpler |
-| 10 | Trait tag pool content | TBD | ~25–30 tags; needs authored list |
-| 11 | Backstory seed tables | TBD | Needs authored micro-tables |
-| 12 | Right-click settler dialogue — authored per tag or templated? | Open | Templated with tag substitution likely sufficient |
-| 13 | Subjective score set — are Happiness / Resolve / Education correct? | Open | Revisit after Phase 2 |
-| 14 | NPC representation long-term (mannequin / indoors / spokesperson / B42 NPC system) | Open | See Section 12; Option B+C recommended for now |
-| 15 | Bundled profession skill advancement — track each skill separately or per profession? | Open | Recommendation: separately |
-| 16 | Storage capacity units — weight-based or slot-based? | Open | Weight is more PZ-like but harder to display |
-| 17 | Item registry rebuild frequency — every tick or on demand? | Open | Every tick simplest; on-demand more performant |
-| 18 | Ambient sound events — trigger on tick, or simulate independently of tick? | Open | Tick-triggered simplest; independent would allow time-of-day variation |
-| 19 | Noise budget UI — slider, tiered presets, or per-activity toggles? | **Resolved** | Tiered presets (Silent/Quiet/Normal/Loud) in the Settings tab of the Bastion Window |
+| 7 | Score threshold values and decay rates | Open | Balance pass after Phase 3 |
+| 8 | Multiplayer: tick behavior with multiple player bastions | Open | Phase 5; significant implications |
+| 9 | Balanced diet tracking — per food type or per food group? | Open | Food group simpler |
+| 10 | Trait tag pool content | Partial | 23 tags implemented; authored review needed |
+| 11 | Backstory seed tables | Partial | Basic tables implemented; may need more variety |
+| 12 | Settler right-click dialogue — authored per tag or templated? | Open | Templated with tag substitution likely sufficient |
+| 13 | Subjective score set — are Happiness / Resolve / Education correct? | Open | Revisit after Phase 3 with real data |
+| 14 | NPC representation long-term | Open | Option A (mannequins) for Phase 1–2; revisit at Phase 3 |
+| 15 | Bundled profession skill advancement | Open | Recommendation: track each skill separately |
+| 16 | Storage capacity units — weight or slot count? | Open | Weight is more PZ-like; slot count simpler to display |
+| 17 | Item registry rebuild frequency | Open | Every tick (simplest); may optimize later |
+| 18 | Ambient sound trigger — on tick or independent timer? | Open | Tick-triggered simplest; independent allows time-of-day variation |
+| 19 | Noise budget UI | **Resolved** | Tiered presets (Silent/Quiet/Normal/Loud) in Settings tab |
+| 20 | Teacher reading speed: does PZ expose book reading rate in Lua? | Open | Need to verify `IsoPlayer:getReadingSpeed()` or equivalent in B42 |
+| 21 | Virtual yield claiming: which container does output land in? | Open | Phase 3 design decision; recommendation: nearest non-private with space |
+| 22 | Item type strings for virtual yield claiming (Thread, BandageSterilized, IronIngot) | Open | Verify against PZ B42 item registry before Phase 3 |
+| 23 | Role settings UI: editable fields in Settings tab vs. separate per-settler panel? | Open | Phase 3 design; per-role settings (not per-settler) in Settings tab recommended |
+| 24 | Trapper: can `IsoTrap` be found via `instanceof` and `sq:getObjects()` in B42? | Open | Phase 2 implementation; verify in test environment |
+| 25 | WaterCarrier: does `sq:isWater()` reliably identify ponds and rivers in B42? | Open | Phase 2 implementation; verify against different water body types |
 
 ---
 
-*Bastion Design Document v0.9 — Working Draft*
-*Maintain this file in the repo root. Update alongside implementation.*
+*Bastion Design Document v1.0*
+*Design before code.  Tests before implementation.  Update this file whenever a decision changes.*

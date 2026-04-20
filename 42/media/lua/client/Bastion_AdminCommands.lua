@@ -14,10 +14,16 @@ print("[Bastion] AdminCommands loading")
 
 -- ── Chat intercept ────────────────────────────────────────────────────────────
 -- Events.OnPlayerSay fires client-side when the local player sends a message.
--- The message still appears in chat — acceptable for admin tooling.
--- Signature in B42: OnPlayerSay(player, message)
+-- NOTE: In B42 this event may not exist client-side; guard against nil.
+-- Signature: OnPlayerSay(player, message)
 --   player  — IsoPlayer (or player index in some versions; handled below)
 --   message — string
+
+if not Events.OnPlayerSay then
+    print("[Bastion] WARNING: Events.OnPlayerSay not available — admin chat commands disabled")
+    print("[Bastion] AdminCommands done")
+    return
+end
 
 Events.OnPlayerSay.Add(function(playerOrIndex, message)
     -- Normalise: player might be passed as an index in some PZ versions.

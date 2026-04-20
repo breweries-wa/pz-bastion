@@ -1,8 +1,10 @@
 -- ============================================================
 -- Bastion_MaeClient.lua  (media/lua/client/)
 -- Client-side only.
--- Handles: context menus (establish, collapse, settler chat,
---          mark-private, noise budget), ModData sync on load.
+-- Handles: context menus (establish, check-on, settler chat,
+--          mark-private), ModData sync on load.
+--
+-- Noise budget and Disband are now inside BastionWindow (Settings tab).
 -- ============================================================
 print("[Bastion] MaeClient loading")
 
@@ -58,7 +60,6 @@ end
 -- ── Mae / settler identification ──────────────────────────────────────────────
 
 -- True if obj is the Mae mannequin for this player.
--- Checks both moddata (reliable once synced) and position fallback.
 local function isMaeMannequin(obj, username, rec)
     if not instanceof(obj, "IsoMannequin") then return false end
 
@@ -96,24 +97,14 @@ local function getSettlerForMannequin(obj, rec)
     return nil
 end
 
--- True if this obj is any bastion mannequin (Mae or settler) for this player.
-local function isBastionMannequin(obj, username, rec)
-    if not instanceof(obj, "IsoMannequin") then return false end
-    if isMaeMannequin(obj, username, rec) then return true end
-    if getSettlerForMannequin(obj, rec) then return true end
-    return false
-end
-
 -- ── Container helpers ─────────────────────────────────────────────────────────
 
--- Returns the "x,y,z" key for any world object.
 local function objKey(obj)
     local sq = obj:getSquare()
     if not sq then return nil end
     return sq:getX() .. "," .. sq:getY() .. "," .. sq:getZ()
 end
 
--- True if the object is a container that belongs to the bastion (not private).
 local function isContainerObject(obj)
     if not obj.getItemContainer then return false end
     local ok, c = pcall(function() return obj:getItemContainer() end)
@@ -128,22 +119,6 @@ local function maeSpeak(mae, text)
     end
     if addLineInChat then
         addLineInChat("[Bastion] " .. text, 0.85, 0.75, 1.0, 1.0)
-    end
-end
-
--- ── Noise-budget sub-menu ─────────────────────────────────────────────────────
-
-local function addNoiseBudgetMenu(context, player, rec)
-    local budgetSub = context:addOptionOnTop("Noise Budget", nil, nil)
-    local subMenu   = ISContextMenu:getNew(context)
-    context:addSubMenu(budgetSub, subMenu)
-
-    local current = rec and rec.noiseBudgetLevel or "Normal"
-    for _, level in ipairs(Bastion.NOISE_BUDGET_LEVELS) do
-        local label = level .. (level == current and "  ✓" or "")
-        subMenu:addOption(label, player, function()
-            sendClientCommand(player, Bastion.MOD_KEY, "SetNoiseBudget", { level = level })
-        end)
     end
 end
 
@@ -167,7 +142,7 @@ Events.OnFillWorldObjectContextMenu.Add(function(playerIndex, context, worldObje
     local rec      = getMaeRecord(username)
 
     -- ── 1. Bastion mannequin interactions ─────────────────────────────────────
-    -- Note: Kahlua (PZ's Lua VM) does not support goto/::label:: syntax.
+    -- Note: Kahlua does not support goto/::label:: syntax.
     -- We wrap the body in `if instanceof` instead of using continue.
     for _, obj in ipairs(worldObjects) do
         if instanceof(obj, "IsoMannequin") then
@@ -216,8 +191,6 @@ Events.OnFillWorldObjectContextMenu.Add(function(playerIndex, context, worldObje
                     function(target) maeSpeak(target, line) end)
 
                 context:addOption("View profile", obj, function(_target)
-                    -- Show backstory and trait in chat as a cheap alternative to a
-                    -- full UI panel (LogPanel is a separate feature).
                     if addLineInChat then
                         addLineInChat("-- " .. settler.name .. " --", 0.9, 0.85, 1.0, 1.0)
                         addLineInChat(settler.backstory or "(unknown)", 0.85, 0.85, 0.85, 1.0)
@@ -238,7 +211,7 @@ Events.OnFillWorldObjectContextMenu.Add(function(playerIndex, context, worldObje
     if rec then
         for _, obj in ipairs(worldObjects) do
             if isContainerObject(obj) and playerIsInBastionBuilding(player, worldObjects, rec) then
-                local key     = objKey(obj)
+                local key = objKey(obj)
                 if not key then break end
                 local private = rec.privateContainers and rec.privateContainers[key]
 
@@ -266,21 +239,23 @@ Events.OnFillWorldObjectContextMenu.Add(function(playerIndex, context, worldObje
     if not refSq then return end
 
     if not rec then
+        -- No bastion yet — offer to establish one
         context:addOption("Establish Bastion", nil, function(_target)
             sendClientCommand(player, Bastion.MOD_KEY, "EstablishBastion", {
                 bx = refSq:getX(),
                 by = refSq:getY(),
                 bz = refSq:getZ(),
             })
+            -- Open the window immediately; Overview will show "establishing…"
+            -- until the server processes and ModData syncs (~5 s auto-refresh).
+            if BastionWindow then
+                BastionWindow.open(player)
+            end
         end)
     elseif playerIsInBastionBuilding(player, worldObjects, rec) then
-        -- Show HUD/log panel toggles plus noise budget
-        context:addOption("Open Settlement Log", nil, function(_target)
-            if BastionLogPanel then BastionLogPanel.toggle(player) end
-        end)
-        addNoiseBudgetMenu(context, player, rec)
-        context:addOption("Collapse Bastion", nil, function(_target)
-            sendClientCommand(player, Bastion.MOD_KEY, "CollapseBastion", {})
+        -- Bastion exists — single entry point into the management window
+        context:addOption("Check on Bastion", nil, function(_target)
+            if BastionWindow then BastionWindow.toggle(player) end
         end)
     end
 end)

@@ -552,6 +552,93 @@ local function onClientCommand(module, command, player, args)
             "Noise budget set to " .. level .. " (max " .. rec.noiseBudget .. ").",
             "standard")
         saveRecord(username, rec)
+
+    -- ── AdminCmd ──────────────────────────────────────────────────────────────
+    elseif command == "AdminCmd" then
+        -- Gate on access level; singleplayer host reports as "Admin".
+        local accessLevel = player:getAccessLevel()
+        if accessLevel ~= "Admin" and accessLevel ~= "Moderator" then
+            print("[Bastion] AdminCmd rejected — " .. username
+                  .. " has access level '" .. (accessLevel or "") .. "'")
+            return
+        end
+
+        local raw = args.raw or ""
+
+        -- Tokenise the raw command string
+        local parts = {}
+        for word in raw:gmatch("%S+") do
+            table.insert(parts, word)
+        end
+        -- parts[1] = "/bastion", parts[2] = subcommand, parts[3..] = args
+
+        local sub = parts[2] and parts[2]:lower() or "help"
+
+        if sub == "help" then
+            print("[Bastion] Admin commands:")
+            print("  /bastion status            — print your settlement status")
+            print("  /bastion tick              — force a settlement tick (runs next minute)")
+            print("  /bastion reset [username]  — collapse a player's bastion")
+            print("  /bastion addlog <text>     — append an admin log entry")
+
+        elseif sub == "status" then
+            local rec = getRecord(username)
+            if rec then
+                print(string.format(
+                    "[Bastion] %s: %d settlers | food=%.1f d | water=%.1f d | noise=%d/%d",
+                    username,
+                    #(rec.settlers or {}),
+                    rec.foodDays  or 0,
+                    rec.waterDays or 0,
+                    rec.noiseScore or 0,
+                    rec.noiseBudget or 6))
+            else
+                print("[Bastion] No bastion for " .. username)
+            end
+
+        elseif sub == "tick" then
+            local rec = getRecord(username)
+            if rec then
+                rec.lastTickDay = -1   -- will trigger on next EveryOneMinute
+                saveRecord(username, rec)
+                print("[Bastion] Tick forced for " .. username)
+            else
+                print("[Bastion] No bastion for " .. username)
+            end
+
+        elseif sub == "reset" then
+            local target = parts[3] or username
+            local wd     = getWorldData()
+            local rec    = wd[target]
+            if rec then
+                removeAllSettlerMannequins(rec)
+                wd[target] = nil
+                ModData.transmit(Bastion.DATA_KEY)
+                print("[Bastion] Bastion reset for " .. target)
+            else
+                print("[Bastion] No bastion found for " .. target)
+            end
+
+        elseif sub == "addlog" then
+            local rec = getRecord(username)
+            if rec then
+                -- Everything after "/bastion addlog "
+                local text = raw:match("^%S+%s+%S+%s+(.+)$") or ""
+                if text ~= "" then
+                    Bastion.addLog(rec, "[Admin] " .. text, "milestone")
+                    saveRecord(username, rec)
+                    print("[Bastion] Log entry added for " .. username)
+                else
+                    print("[Bastion] Usage: /bastion addlog <text>")
+                end
+            else
+                print("[Bastion] No bastion for " .. username)
+            end
+
+        else
+            print("[Bastion] Unknown subcommand '" .. sub
+                  .. "'. Type /bastion help for a list.")
+        end
     end
 end
 

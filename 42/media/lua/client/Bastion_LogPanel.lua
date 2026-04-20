@@ -112,9 +112,9 @@ end
 -- ── Button handlers ───────────────────────────────────────────────────────────
 
 function BastionLogPanel:onClose()
-    -- `self` here is the button; walk up to the panel.
-    local panel = self:getParent()
-    if panel then panel:removeFromUIManager() end
+    -- ISButton passes its `target` as self, and we set target=panel,
+    -- so self IS the panel here — remove it directly.
+    self:removeFromUIManager()
     BastionLogPanel._instance = nil
 end
 

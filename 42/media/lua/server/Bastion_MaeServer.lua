@@ -67,7 +67,9 @@ local function scanContainers(rec)
     for x = bx - r, bx + r do
         for y = by - r, by + r do
             local sq = cell:getGridSquare(x, y, bz)
-            if sq and sq:getRoom() then
+            -- No sq:getRoom() filter — player-built extensions have no IsoRoom
+            -- but their containers are still valid bastion storage.
+            if sq then
                 local objs = sq:getObjects()
                 for i = 0, objs:size() - 1 do
                     local obj = objs:get(i)

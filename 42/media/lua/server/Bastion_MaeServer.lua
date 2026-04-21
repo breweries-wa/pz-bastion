@@ -531,9 +531,43 @@ end
 
 -- ── Bed counting ──────────────────────────────────────────────────────────────
 
--- Count bed objects within the bastion radius by sprite-name substring.
--- OQ #29: exact sprite names unverified — "bed", "cot", "mattress", "bunk"
--- are candidates.  May over-count double beds (two sprites per object).
+-- Keywords matched against both the sprite name and the display name of each
+-- world object.  "bedding" covers sprites like "furniture_bedding_01_54".
+-- Double beds span two tiles; each tile counts as one sleep-spot (intentional).
+local BED_KEYWORDS = { "bed", "bedding", "cot", "mattress", "bunk" }
+
+local function nameMatchesBed(s)
+    if type(s) ~= "string" then return false end
+    local sl = s:lower()
+    for _, kw in ipairs(BED_KEYWORDS) do
+        if sl:find(kw, 1, true) then return true end
+    end
+    return false
+end
+
+-- Collect candidate name strings from a world object without risking uncaught
+-- Java exceptions: each call is individually pcall-wrapped so a failure on one
+-- method falls through to the next rather than aborting the whole loop.
+local function getBedCandidateNames(obj)
+    local names = {}
+    -- 1. sprite name  (e.g. "furniture_bedding_01_54")
+    local ok, spr = pcall(function() return obj:getSprite() end)
+    if ok and spr then
+        local ok2, n = pcall(function() return spr:getName() end)
+        if ok2 then names[#names+1] = n end
+        -- some sprites expose the name via tostring
+        local ok3, ts = pcall(function() return tostring(spr) end)
+        if ok3 then names[#names+1] = ts end
+    end
+    -- 2. display name (e.g. "Maple Double Bed")
+    local ok4, dn = pcall(function() return obj:getName() end)
+    if ok4 then names[#names+1] = dn end
+    -- 3. object name
+    local ok5, on = pcall(function() return obj:getObjectName() end)
+    if ok5 then names[#names+1] = on end
+    return names
+end
+
 local function countBeds(rec)
     local cell = getCell()
     if not cell then return 0 end
@@ -548,15 +582,11 @@ local function countBeds(rec)
                 local objs = sq:getObjects()
                 for i = 0, objs:size() - 1 do
                     local obj = objs:get(i)
-                    local ok, spr = pcall(function() return obj:getSprite() end)
-                    if ok and spr then
-                        local ok2, n = pcall(function() return spr:getName() end)
-                        if ok2 and type(n) == "string" then
-                            local nl = n:lower()
-                            if nl:find("bed") or nl:find("cot") or nl:find("mattress")
-                            or nl:find("bunk") then
-                                count = count + 1
-                            end
+                    local candidates = getBedCandidateNames(obj)
+                    for _, name in ipairs(candidates) do
+                        if nameMatchesBed(name) then
+                            count = count + 1
+                            break  -- only count this tile once
                         end
                     end
                 end

@@ -937,20 +937,6 @@ All tests use a fresh single-player save with Bastion enabled.
 - *Steps:* Save, quit, load.  Right-click inside bastion.
 - *Pass:* "Check on Bastion" appears.  Record intact.
 
-#### Group 2 — Settler Spawning & Persistence
-
-**T2.1 — Establishing spawns a settler**
-- *Steps:* Establish bastion, look inside.
-- *Pass:* At least one mannequin present.  Arrival entry in Log tab.
-
-**T2.2 — Settler persists across save/load**
-- *Steps:* Note position, save, load.
-- *Pass:* Mannequin at same position.  Name and role unchanged.
-
-**T2.3 — Collapse removes settlers**
-- *Steps:* Collapse bastion, check building.
-- *Pass:* Mannequins removed.  No orphans.
-
 #### Group 3 — NPC Generation
 
 **T3.1 — Settler has a name**

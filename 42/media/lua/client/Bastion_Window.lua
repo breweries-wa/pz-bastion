@@ -119,7 +119,11 @@ function BastionOverviewPanel:populate(player)
 
     local fd = rec.foodDays or 0
     local fr, fg, fb = dayColor(fd, 7, 3)
-    row(string.format("Food:      %.1f days", fd), fr, fg, fb)
+    if rec.storedFoodItems then
+        row(string.format("Food:      %.1f days  (%d items)", fd, rec.storedFoodItems), fr, fg, fb)
+    else
+        row(string.format("Food:      %.1f days", fd), fr, fg, fb)
+    end
 
     local wd   = rec.waterDays        or 0
     local pool = rec.settlerWaterPool or 0
@@ -160,35 +164,6 @@ function BastionOverviewPanel:populate(player)
             hsR, hsG, hsB, true)
         if rec.cachedHasAnimals then
             row("  Animals:      present", 0.4, 1.0, 0.4, true)
-        end
-    end
-
-    local yield = rec.virtualYield
-    if yield then
-        local hasAny = false
-        for _, v in pairs(yield) do
-            if type(v) == "number" and v > 0 then hasAny = true; break end
-        end
-        if hasAny then
-            row("")
-            row("Settler production (pending):", 0.75, 0.65, 1.0)
-            local displayList = (Bastion and Bastion.YIELD_DISPLAY) or {}
-            local shown = {}
-            for _, entry in ipairs(displayList) do
-                local v = yield[entry.key]
-                if v and v > 0 then
-                    row(string.format("  %-22s %d", entry.label .. ":", math.floor(v)),
-                        0.75, 0.9, 0.75, true)
-                    shown[entry.key] = true
-                end
-            end
-            for k, v in pairs(yield) do
-                if not shown[k] and type(v) == "number" and v > 0 then
-                    row(string.format("  %-22s %d", k .. ":", math.floor(v)),
-                        0.75, 0.9, 0.75, true)
-                end
-            end
-            row("  (Item claiming coming in a future update)", 0.45, 0.45, 0.45, true)
         end
     end
 
@@ -282,7 +257,8 @@ function BastionSettlersPanel:populate(player)
 end
 
 function BastionSettlersPanel.drawItem(listbox, y, item, alt)
-    if not item then return end
+    local ih = listbox.itemheight or 18
+    if not item then return y + ih end
     local settler = item.item
     local r, g, b = 0.85, 0.85, 0.85
     if settler then
@@ -290,10 +266,11 @@ function BastionSettlersPanel.drawItem(listbox, y, item, alt)
         elseif settler.mood == "Critical"   then r, g, b = 1.0, 0.35, 0.35 end
     end
     if alt then
-        listbox:drawRect(0, y, listbox:getWidth(), listbox.itemheight, 0.04, 0.5, 0.4, 0.6)
+        listbox:drawRect(0, y, listbox:getWidth(), ih, 0.04, 0.5, 0.4, 0.6)
     end
     local text = fitText(UIFont.Small, item.text or "", listbox:getWidth() - 12)
     listbox:drawText(text, 6, y + 2, r, g, b, 1.0, UIFont.Small)
+    return y + ih
 end
 
 function BastionSettlersPanel:render()
@@ -393,21 +370,20 @@ function BastionLogTabPanel:populate(player)
         local display = "[Day " .. (entry.day or 0) .. "]  " .. (entry.text or "")
         self.listbox:addItem(display, entry)
     end
-    if self.listbox.vscroll then
-        self.listbox.vscroll:setCurrentValue(self.listbox.vscroll.max or 0)
-    end
 end
 
 function BastionLogTabPanel.drawItem(listbox, y, item, alt)
-    if not item then return end
+    local ih = listbox.itemheight or 18
+    if not item then return y + ih end
     local entry = item.item
-    if not entry then return end
+    if not entry then return y + ih end
     local col = LOG_COLORS[entry.logType or "standard"] or LOG_COLORS.standard
     if alt then
-        listbox:drawRect(0, y, listbox:getWidth(), listbox.itemheight, 0.04, 0.5, 0.4, 0.6)
+        listbox:drawRect(0, y, listbox:getWidth(), ih, 0.04, 0.5, 0.4, 0.6)
     end
     local text = fitText(UIFont.Small, item.text or "", listbox:getWidth() - 12)
     listbox:drawText(text, 6, y + 2, col[1], col[2], col[3], col[4] or 1.0, UIFont.Small)
+    return y + ih
 end
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -445,7 +421,7 @@ function BastionSettingsPanel:createChildren()
         table.insert(self.noiseBtns, btn)
     end
 
-    local disbandY = 140
+    local disbandY = 72
 
     self.disbandBtn = ISButton:new(dx, disbandY, 152, 24,
                                    "Disband Bastion",
@@ -504,11 +480,11 @@ function BastionSettingsPanel:render()
             or  { r=0.15, g=0.10, b=0.20, a=0.80 }
     end
 
-    self:drawText("Disband Settlement", 14, 82, 0.65, 0.55, 0.55, 1.0, UIFont.Small)
+    self:drawText("Disband Settlement", 14, 60, 0.65, 0.55, 0.55, 1.0, UIFont.Small)
     self:drawText("This is permanent — all settlers disperse",
-                  14, 100, 0.45, 0.45, 0.45, 0.9, UIFont.Small)
+                  14, 78, 0.45, 0.45, 0.45, 0.9, UIFont.Small)
     self:drawText("and the settlement record is erased.",
-                  14, 116, 0.45, 0.45, 0.45, 0.9, UIFont.Small)
+                  14, 94, 0.45, 0.45, 0.45, 0.9, UIFont.Small)
 end
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -712,32 +688,29 @@ function BastionWindow:onMouseUp(x, y)
     return true
 end
 
+function BastionWindow:onMouseUpOutside(x, y)
+    self.dragging = false
+    self.resizing = false
+end
+
 function BastionWindow:update()
     ISPanel.update(self)
 
     if self.resizing then
-        if not Mouse.isButtonDown(Mouse.LEFT) then
-            self.resizing = false
-        else
-            local newW = math.max(MIN_W, self.resizeOriginW + (getMouseX() - self.resizeOriginMX))
-            local newH = math.max(MIN_H, self.resizeOriginH + (getMouseY() - self.resizeOriginMY))
-            if newW ~= self.winW or newH ~= self.winH then
-                self.winW = newW
-                self.winH = newH
-                self:updateLayout()
-            end
+        local newW = math.max(MIN_W, self.resizeOriginW + (getMouseX() - self.resizeOriginMX))
+        local newH = math.max(MIN_H, self.resizeOriginH + (getMouseY() - self.resizeOriginMY))
+        if newW ~= self.winW or newH ~= self.winH then
+            self.winW = newW
+            self.winH = newH
+            self:updateLayout()
         end
     elseif self.dragging then
-        if not Mouse.isButtonDown(Mouse.LEFT) then
-            self.dragging = false
-        else
-            self:setX(self.dragWinX + (getMouseX() - self.dragMouseX))
-            self:setY(self.dragWinY + (getMouseY() - self.dragMouseY))
-        end
+        self:setX(self.dragWinX + (getMouseX() - self.dragMouseX))
+        self:setY(self.dragWinY + (getMouseY() - self.dragMouseY))
     end
 
     self.refreshCounter = self.refreshCounter + 1
-    if self.refreshCounter >= 150 then
+    if self.refreshCounter >= 60 then
         self.refreshCounter = 0
         self:populate()
     end

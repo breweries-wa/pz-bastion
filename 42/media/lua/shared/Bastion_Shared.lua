@@ -28,17 +28,6 @@ Bastion.WATER_SOURCE_CACHE_DAYS = 7     -- re-scan for water sources every N in-
 Bastion.SCRAP_PER_INGOT  = 4    -- scrap items consumed per ingot produced
 Bastion.SCRAP_FLOOR      = 10   -- minimum scrap count the blacksmith will never touch
 
--- Spawn offsets from the bastion reference square for settler mannequins.
-Bastion.SETTLER_OFFSETS = {
-    { x=2, y=2, z=0 },
-    { x=3, y=2, z=0 },
-    { x=2, y=3, z=0 },
-    { x=4, y=2, z=0 },
-    { x=3, y=3, z=0 },
-    { x=1, y=2, z=0 },
-    { x=2, y=1, z=0 },
-}
-
 -- ── Noise budgets ─────────────────────────────────────────────────────────────
 
 Bastion.NOISE_BUDGETS       = { Silent=1, Quiet=3, Normal=6, Loud=12 }
@@ -86,21 +75,6 @@ Bastion.ROLE_SETTINGS_DEFAULTS = {
     Woodcutter   = { maxPlanks    = 60,  keepFiresLit = true },
     Rancher      = { minGrainReserve = 10 },
     WaterCarrier = { collectRadius = 50  },
-}
-
--- ── Virtual yield item keys ─────────────────────────────────────────────────
--- Keys used in rec.virtualYield = { [key] = N, ... }
--- Displayed in the window; item spawning comes in a later phase.
-
-Bastion.YIELD_DISPLAY = {
-    { key="thread",    label="Thread (units)"    },
-    { key="bandages",  label="Sterile Bandages"  },
-    { key="ingots",    label="Metal Ingots"      },
-    { key="meals",     label="Prepared Meals"    },
-    { key="fish",      label="Fresh Fish"        },
-    { key="meat",      label="Trap Catch (meat)" },
-    { key="planks",    label="Planks"            },
-    { key="firewood",  label="Firewood (loads)"  },
 }
 
 -- ── NPC Generation Tables ────────────────────────────────────────────────────
@@ -244,18 +218,6 @@ function Bastion.getSetting(rec, role, key)
     if val ~= nil then return val end
     local defaults = Bastion.ROLE_SETTINGS_DEFAULTS[role]
     return defaults and defaults[key]
-end
-
--- Accumulate virtual yield, respecting the cap.
--- Returns the amount actually added.
-function Bastion.addVirtualYield(rec, key, amount, cap)
-    rec.virtualYield = rec.virtualYield or {}
-    local cur    = rec.virtualYield[key] or 0
-    local space  = cap and math.max(0, cap - cur) or amount
-    local actual = math.min(amount, space)
-    if actual <= 0 then return 0 end
-    rec.virtualYield[key] = cur + actual
-    return actual
 end
 
 -- Safe current-day helper.

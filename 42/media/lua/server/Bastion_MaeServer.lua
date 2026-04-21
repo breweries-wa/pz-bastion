@@ -6,10 +6,9 @@
 --   • Settlement tick (once per in-game day)
 --   • Container scanning + resource estimation
 --   • Settler-managed water pool
---   • Virtual yield accumulation
---   • Settler mannequin spawn / removal
 --   • Client command dispatch (EstablishBastion, CollapseBastion,
---     MarkPrivate, SetNoiseBudget, SetRoleSetting, AdminCmd)
+--     MarkPrivate, SetNoiseBudget, SetRoleSetting,
+--     ForceTick, AddSettler, AdminCmd)
 -- ============================================================
 print("[Bastion] Server loading")
 
@@ -127,6 +126,7 @@ local function estimateResources(rec, storage)
 
     local totalCalories = 0
     local totalWater    = 0
+    local foodItemCount = 0
 
     local allItems = {}
     for _, item in ipairs(storage.general)      do table.insert(allItems, item) end
@@ -134,7 +134,10 @@ local function estimateResources(rec, storage)
     for _, item in ipairs(storage.frozen)       do table.insert(allItems, item) end
 
     for _, item in ipairs(allItems) do
-        if isFood(item) then totalCalories = totalCalories + 500 end
+        if isFood(item) then
+            totalCalories = totalCalories + 500
+            foodItemCount = foodItemCount + 1
+        end
         totalWater = totalWater + getWaterUnits(item)
     end
 
@@ -151,6 +154,8 @@ local function estimateResources(rec, storage)
         refrigerated = storage.capacity.refrigerated,
         frozen       = storage.capacity.frozen,
     }
+    rec.storedFoodItems  = foodItemCount
+    rec.storedWaterUnits = math.floor(totalWater * 10) / 10
 end
 
 -- ── Water pool helpers ────────────────────────────────────────────────────────
@@ -331,89 +336,6 @@ local function isPerishable(item)
     return false
 end
 
--- ── Settler mannequin helpers ─────────────────────────────────────────────────
-
-local SPRITE_FEMALE = "location_shop_mall_01_65"
-local SPRITE_MALE   = "location_shop_mall_01_68"
-local SCRIPT_FEMALE = "FemaleBlack01"
-local SCRIPT_MALE   = "MaleBlack01"
-
-local function spawnSettlerMannequin(settler)
-    local cell = getCell()
-    if not cell then return false end
-
-    local sq = cell:getGridSquare(settler.x, settler.y, settler.z)
-    if not sq then
-        print("[Bastion] spawnSettler: no square at "
-            .. settler.x .. "," .. settler.y .. "," .. settler.z)
-        return false
-    end
-
-    local spriteName = settler.isMale and SPRITE_MALE   or SPRITE_FEMALE
-    local scriptName = settler.isMale and SCRIPT_MALE   or SCRIPT_FEMALE
-    local spr = getSprite(spriteName)
-    if not spr then
-        print("[Bastion] spawnSettler: sprite not found: " .. spriteName)
-        return false
-    end
-
-    local obj = IsoMannequin.new(cell, sq, spr)
-    obj:setSquare(sq)
-    if obj.setMannequinScriptName then obj:setMannequinScriptName(scriptName) end
-
-    local md = obj:getModData()
-    md["Bastion_Settler"]   = true
-    md["Bastion_Owner"]     = settler.ownerUsername
-    md["Bastion_SettlerID"] = settler.id
-    md["Bastion_Name"]      = settler.name
-    md["Bastion_Role"]      = settler.role
-
-    local idx = sq:getObjects():size()
-    sq:AddSpecialObject(obj, idx)
-    if obj.transmitCompleteItemToClients then
-        obj:transmitCompleteItemToClients()
-    end
-    print("[Bastion] Spawned settler " .. settler.name)
-    return true
-end
-
-local function removeSettlerMannequin(settler)
-    if not settler.x then return end
-    local cell = getCell()
-    if not cell then return end
-    local sq = cell:getGridSquare(settler.x, settler.y, settler.z)
-    if not sq then return end
-    local objs = sq:getObjects()
-    for i = 0, objs:size() - 1 do
-        local o = objs:get(i)
-        if instanceof(o, "IsoMannequin") then
-            local md = o:getModData()
-            if md["Bastion_SettlerID"] == settler.id then
-                sq:transmitRemoveItemFromSquare(o)
-                return
-            end
-        end
-    end
-end
-
-local function removeAllSettlerMannequins(rec)
-    for _, settler in ipairs(rec.settlers or {}) do
-        removeSettlerMannequin(settler)
-    end
-end
-
-local function findSpawnSquare(bx, by, bz, startOffset)
-    local cell = getCell()
-    if not cell then return bx, by, bz end
-    for i = startOffset or 1, #Bastion.SETTLER_OFFSETS do
-        local off = Bastion.SETTLER_OFFSETS[i]
-        local x, y, z = bx + off.x, by + off.y, bz + (off.z or 0)
-        local sq = cell:getGridSquare(x, y, z)
-        if sq and sq:getRoom() then return x, y, z end
-    end
-    return bx, by, bz
-end
-
 local function generateSettlerID()
     return tostring(math.floor(getTimeInMillis()))
         .. tostring(ZombRand(99999))
@@ -428,13 +350,11 @@ end
 local ROLE_TICKS = {}
 
 -- ── Tailor ────────────────────────────────────────────────────────────────────
--- Phase 1: wash dirty rags (costs settler water), pick thread up to maxThread.
--- Phase 2 (skill 8+): repair clothing holes (requires addPatches setting).
+-- Phase 1: wash dirty rags (costs settler water), pick thread from clean rags.
+-- Phase 2: place thread items in storage; skill 8+ repairs clothing holes.
 
 ROLE_TICKS.Tailor = function(settler, rec, storage)
-    local maxThread = Bastion.getSetting(rec, "Tailor", "maxThread") or 50
-    local curThread = (rec.virtualYield or {}).thread or 0
-    local acted     = false
+    local acted = false
 
     -- Step 1: Wash dirty rags — each rag costs a small water draw.
     local dirtyCount = 0
@@ -458,32 +378,19 @@ ROLE_TICKS.Tailor = function(settler, rec, storage)
         end
     end
 
-    -- Step 2: Pick thread from clean rags up to the cap.
-    if curThread >= maxThread then
-        Bastion.addLog(rec,
-            settler.name .. " — thread stock is at cap ("
-            .. maxThread .. "). No rags consumed.",
-            "standard")
-        return
-    end
-
-    -- Count clean rags available
+    -- Step 2: Pick thread from clean rags.
     local cleanRags = 0
     for _, item in ipairs(storage.general) do
         if isRag(item) and not isDirtyRag(item) then cleanRags = cleanRags + 1 end
     end
 
-    -- Produce up to skillLevel threads per tick from clean rags
-    local canProduce = math.min(cleanRags, settler.skillLevel, maxThread - curThread)
+    local canProduce = math.min(cleanRags, settler.skillLevel)
     if canProduce > 0 then
-        local added = Bastion.addVirtualYield(rec, "thread", canProduce, maxThread)
-        if added > 0 then
-            Bastion.addLog(rec,
-                string.format("%s picked %d thread. Stock: %d/%d.",
-                    settler.name, added, curThread + added, maxThread),
-                "standard")
-            acted = true
-        end
+        Bastion.addLog(rec,
+            string.format("%s picked %d thread from rags.",
+                settler.name, canProduce),
+            "standard")
+        acted = true
     elseif cleanRags == 0 then
         Bastion.addLog(rec, settler.name .. " found no clean rags to pick thread from.", "warning")
     end
@@ -498,16 +405,7 @@ end
 -- Requires settler water + a heat source in the bastion.
 
 ROLE_TICKS.Doctor = function(settler, rec, storage)
-    local maxBandages = Bastion.getSetting(rec, "Doctor", "maxBandages") or 20
-    local curBandages = (rec.virtualYield or {}).bandages or 0
-    rec.doctorActive  = true
-
-    if curBandages >= maxBandages then
-        Bastion.addLog(rec,
-            settler.name .. " — bandage stock is at cap (" .. maxBandages .. ").",
-            "standard")
-        return
-    end
+    rec.doctorActive = true
 
     -- Requires a heat source (cached)
     if not rec.cachedHeatSource then
@@ -528,13 +426,13 @@ ROLE_TICKS.Doctor = function(settler, rec, storage)
     end
 
     -- Each bandage costs 1 rag + a small water draw (boiling)
-    local canMake  = math.min(cleanRags, maxBandages - curBandages, settler.skillLevel + 1)
+    local canMake   = math.min(cleanRags, settler.skillLevel + 1)
     local waterCost = canMake * 0.15   -- 0.15 settler-days of water per bandage
     if not debitWater(rec, waterCost) then
         -- Try to make fewer with available water
-        local pool    = rec.settlerWaterPool or 0
-        canMake       = math.floor(pool / 0.15)
-        waterCost     = canMake * 0.15
+        local pool  = rec.settlerWaterPool or 0
+        canMake     = math.floor(pool / 0.15)
+        waterCost   = canMake * 0.15
         if canMake <= 0 then
             Bastion.addLog(rec,
                 settler.name .. " couldn't sterilize — settler water supply too low.",
@@ -544,12 +442,10 @@ ROLE_TICKS.Doctor = function(settler, rec, storage)
         debitWater(rec, waterCost)
     end
 
-    local added = Bastion.addVirtualYield(rec, "bandages", canMake, maxBandages)
-    if added > 0 then
+    if canMake > 0 then
         Bastion.addLog(rec,
-            string.format("%s sterilized %d bandage%s. Stock: %d/%d.",
-                settler.name, added, added ~= 1 and "s" or "",
-                curBandages + added, maxBandages),
+            string.format("%s sterilized %d bandage%s.",
+                settler.name, canMake, canMake ~= 1 and "s" or ""),
             "standard")
     end
 end
@@ -600,7 +496,6 @@ ROLE_TICKS.Cook = function(settler, rec, storage)
     local fromPerish = math.min(mealsMade, #perishable)
 
     rec.cookActive = true
-    Bastion.addVirtualYield(rec, "meals", mealsMade)
     Bastion.addLog(rec,
         string.format("%s prepared %d meal%s (%d from perishables).",
             settler.name, mealsMade, mealsMade ~= 1 and "s" or "", fromPerish),
@@ -627,8 +522,6 @@ ROLE_TICKS.Farmer = function(settler, rec, storage)
 
     if saveSeeds then
         local seeds = math.max(1, math.floor(produce * 0.15))
-        rec.virtualYield               = rec.virtualYield or {}
-        rec.virtualYield.savedSeeds    = (rec.virtualYield.savedSeeds or 0) + seeds
         Bastion.addLog(rec,
             string.format("%s tended crops, harvested %d item%s (%d seed%s set aside).",
                 settler.name, produce, produce ~= 1 and "s" or "",
@@ -647,8 +540,7 @@ end
 -- If keepFiresLit, maintains campfire/stove fuel stock.
 
 ROLE_TICKS.Woodcutter = function(settler, rec, storage)
-    local maxPlanks    = Bastion.getSetting(rec, "Woodcutter", "maxPlanks") or 60
-    local keepFires    = Bastion.getSetting(rec, "Woodcutter", "keepFiresLit")
+    local keepFires = Bastion.getSetting(rec, "Woodcutter", "keepFiresLit")
     if keepFires == nil then keepFires = true end
 
     local hasAxe  = false
@@ -669,35 +561,23 @@ ROLE_TICKS.Woodcutter = function(settler, rec, storage)
         return
     end
 
-    local curPlanks = (rec.virtualYield or {}).planks or 0
-    local planksNeeded = math.max(0, maxPlanks - curPlanks)
-
-    if planksNeeded == 0 then
-        Bastion.addLog(rec,
-            settler.name .. " — plank stock at cap (" .. maxPlanks .. ").", "standard")
-    elseif logCount == 0 then
+    if logCount == 0 then
         Bastion.addLog(rec,
             settler.name .. " found no logs to chop.", "warning")
     else
         -- Each log yields 4 planks; settler chops up to skillLevel logs
-        local logsToChop  = math.min(logCount, settler.skillLevel,
-                                     math.ceil(planksNeeded / 4))
-        local planksFrom  = logsToChop * 4
-        local added       = Bastion.addVirtualYield(rec, "planks", planksFrom, maxPlanks)
+        local logsToChop = math.min(logCount, settler.skillLevel)
+        local planksFrom = logsToChop * 4
         Bastion.addLog(rec,
-            string.format("%s chopped %d log%s → %d planks. Stock: %d/%d.",
-                settler.name, logsToChop, logsToChop ~= 1 and "s" or "",
-                added, curPlanks + added, maxPlanks),
+            string.format("%s chopped %d log%s → %d planks.",
+                settler.name, logsToChop, logsToChop ~= 1 and "s" or "", planksFrom),
             "standard")
     end
 
     -- Keep fires lit
     if keepFires and rec.cachedHeatSource then
-        local firewoodAdded = Bastion.addVirtualYield(rec, "firewood", settler.skillLevel)
-        if firewoodAdded > 0 then
-            Bastion.addLog(rec,
-                settler.name .. " kept the fires stocked.", "standard")
-        end
+        Bastion.addLog(rec,
+            settler.name .. " kept the fires stocked.", "standard")
     end
 end
 
@@ -754,16 +634,7 @@ end
 -- Does NOT run the spoon grind — that is the player's domain for skill XP.
 
 ROLE_TICKS.Blacksmith = function(settler, rec, storage)
-    local maxIngots  = Bastion.getSetting(rec, "Blacksmith", "maxIngots")  or 20
     local scrapFloor = Bastion.getSetting(rec, "Blacksmith", "scrapFloor") or Bastion.SCRAP_FLOOR
-    local curIngots  = (rec.virtualYield or {}).ingots or 0
-
-    if curIngots >= maxIngots then
-        Bastion.addLog(rec,
-            settler.name .. " — ingot stock at cap (" .. maxIngots .. "). No scrap smelted.",
-            "standard")
-        return
-    end
 
     if not rec.cachedHeatSource then
         Bastion.addLog(rec,
@@ -791,15 +662,14 @@ ROLE_TICKS.Blacksmith = function(settler, rec, storage)
     -- Throughput: settler.skillLevel ingots per tick
     local canMake = math.min(
         math.floor(usable / Bastion.SCRAP_PER_INGOT),
-        settler.skillLevel,
-        maxIngots - curIngots)
+        settler.skillLevel)
 
-    local added = Bastion.addVirtualYield(rec, "ingots", canMake, maxIngots)
-    Bastion.addLog(rec,
-        string.format("%s smelted %d ingot%s from scrap. Stock: %d/%d.",
-            settler.name, added, added ~= 1 and "s" or "",
-            curIngots + added, maxIngots),
-        "standard")
+    if canMake > 0 then
+        Bastion.addLog(rec,
+            string.format("%s smelted %d ingot%s from scrap.",
+                settler.name, canMake, canMake ~= 1 and "s" or ""),
+            "standard")
+    end
 end
 
 -- ── Rancher ───────────────────────────────────────────────────────────────────
@@ -839,11 +709,6 @@ ROLE_TICKS.Rancher = function(settler, rec, storage)
     -- Produce based on skill: eggs, milk (abstract yield)
     local eggYield  = settler.skillLevel >= 2 and ZombRand(settler.skillLevel) + 1 or 0
     local milkYield = settler.skillLevel >= 3 and ZombRand(2) + 1 or 0
-
-    if eggYield  > 0 then Bastion.addVirtualYield(rec, "eggs",  eggYield)  end
-    if milkYield > 0 then Bastion.addVirtualYield(rec, "milk",  milkYield) end
-
-    rec.virtualYield = rec.virtualYield or {}
 
     Bastion.addLog(rec,
         string.format("%s fed and tended the animals.%s%s",
@@ -908,7 +773,7 @@ ROLE_TICKS.Mechanic = function(settler, rec, storage)
 end
 
 ROLE_TICKS.Trapper = function(settler, rec, storage)
-    -- Phase 1: abstract yield. Phase 2: scan for actual IsoTrap objects.
+    -- Phase 1: check bait and log catch. Phase 2: scan for actual IsoTrap objects, place items.
     local hasBait = false
     for _, item in ipairs(storage.general) do
         local ok, t = pcall(function() return item:getType() end)
@@ -926,7 +791,6 @@ ROLE_TICKS.Trapper = function(settler, rec, storage)
     end
     local caught = ZombRand(settler.skillLevel + 1)
     if caught > 0 then
-        Bastion.addVirtualYield(rec, "meat", caught)
         Bastion.addLog(rec,
             settler.name .. " checked the traps. Catch: " .. caught .. " item"
             .. (caught ~= 1 and "s" or "") .. ".", "standard")
@@ -963,19 +827,11 @@ ROLE_TICKS.Fisher = function(settler, rec, storage)
         return
     end
 
-    local maxFish = Bastion.getSetting(rec, "Fisher", "maxFishStock") or 30
-    local caught  = ZombRand(settler.skillLevel * 2) + 1
-    local added   = Bastion.addVirtualYield(rec, "fish", caught, maxFish)
-
-    if added > 0 then
-        Bastion.addLog(rec,
-            string.format("%s fished and caught %d. Stock: %d/%d.",
-                settler.name, added, (rec.virtualYield.fish or 0), maxFish),
-            "standard")
-    else
-        Bastion.addLog(rec,
-            settler.name .. " fished — but the stock is already full.", "standard")
-    end
+    local caught = ZombRand(settler.skillLevel * 2) + 1
+    Bastion.addLog(rec,
+        string.format("%s fished and caught %d item%s.",
+            settler.name, caught, caught ~= 1 and "s" or ""),
+        "standard")
 end
 
 ROLE_TICKS.Forager = function(settler, rec, storage)
@@ -989,7 +845,6 @@ end
 
 ROLE_TICKS.Hunter = function(settler, rec, storage)
     local caught = ZombRand(settler.skillLevel) + 1
-    Bastion.addVirtualYield(rec, "meat", caught)
     Bastion.addLog(rec,
         settler.name .. " went hunting. Returned with " .. caught .. " item"
         .. (caught ~= 1 and "s" or "") .. ".", "standard")
@@ -1011,9 +866,8 @@ end
 local function runSettlementTick(username, rec)
     print("[Bastion] Running tick for " .. username)
 
-    rec.settlers      = rec.settlers     or {}
-    rec.virtualYield  = rec.virtualYield or {}
-    rec.cookActive    = false
+    rec.settlers   = rec.settlers or {}
+    rec.cookActive = false
     rec.doctorActive  = false
     rec.teacherActive = false
 
@@ -1137,7 +991,6 @@ local function onClientCommand(module, command, player, args)
             foodDays         = 0,
             waterDays        = 0,
             settlerWaterPool = 0,
-            virtualYield     = {},
             noiseScore       = 1,
             noiseBudget      = 6,
             noiseBudgetLevel = "Normal",
@@ -1158,7 +1011,6 @@ local function onClientCommand(module, command, player, args)
 
         local npc  = Bastion.generateNPC({})
         local role = Bastion.pickRandom(Bastion.STARTER_ROLES)
-        local sx, sy, sz = findSpawnSquare(bx, by, bz, 1)
 
         local settler = {
             id            = generateSettlerID(),
@@ -1169,11 +1021,9 @@ local function onClientCommand(module, command, player, args)
             traitTag      = npc.traitTag,
             backstory     = npc.backstory,
             mood          = "Content",
-            x             = sx, y = sy, z = sz,
             ownerUsername = username,
         }
         table.insert(rec.settlers, settler)
-        spawnSettlerMannequin(settler)
 
         Bastion.addLog(rec,
             string.format("A survivor arrived: %s (%s, skill %d). %s. They seem %s.",
@@ -1188,7 +1038,6 @@ local function onClientCommand(module, command, player, args)
     elseif command == "CollapseBastion" then
         local rec = getRecord(username)
         if not rec then return end
-        removeAllSettlerMannequins(rec)
         clearRecord(username)
         print("[Bastion] Bastion collapsed for " .. username)
 
@@ -1207,6 +1056,9 @@ local function onClientCommand(module, command, player, args)
             rec.privateContainers[key] = true
             Bastion.addLog(rec, "A container was marked as private.", "standard")
         end
+        -- Recalculate food/water estimates immediately so the window
+        -- reflects the change without waiting for the next daily tick.
+        estimateResources(rec, scanContainers(rec))
         saveRecord(username, rec)
 
     -- ── SetNoiseBudget ────────────────────────────────────────────────────────
@@ -1270,10 +1122,9 @@ local function onClientCommand(module, command, player, args)
             local rec = getRecord(username)
             if rec then
                 print(string.format(
-                    "[Bastion] %s: %d settlers | food=%.1f d | water=%.1f d (pool=%.1f) | noise=%d/%d",
+                    "[Bastion] %s: %d settlers | food=%.1f d | water=%.1f d | noise=%d/%d",
                     username, #(rec.settlers or {}),
                     rec.foodDays or 0, rec.waterDays or 0,
-                    rec.settlerWaterPool or 0,
                     rec.noiseScore or 0, rec.noiseBudget or 6))
             else
                 print("[Bastion] No bastion for " .. username)
@@ -1292,7 +1143,6 @@ local function onClientCommand(module, command, player, args)
             local wd     = getWorldData()
             local rec    = wd[target]
             if rec then
-                removeAllSettlerMannequins(rec)
                 wd[target] = nil
                 ModData.transmit(Bastion.DATA_KEY)
                 print("[Bastion] Bastion reset for " .. target)
@@ -1312,6 +1162,45 @@ local function onClientCommand(module, command, player, args)
         else
             print("[Bastion] Unknown subcommand. Type /bastion help.")
         end
+    -- ── ForceTick ─────────────────────────────────────────────────────────────
+    -- No access-level check — testing tool available to all players.
+    elseif command == "ForceTick" then
+        local rec = getRecord(username)
+        if rec then
+            rec.lastTickDay = -1
+            saveRecord(username, rec)
+            print("[Bastion] Tick forced for " .. username)
+        end
+
+    -- ── AddSettler ────────────────────────────────────────────────────────────
+    -- Spawns a randomly-generated settler.  No access-level check.
+    elseif command == "AddSettler" then
+        local rec = getRecord(username)
+        if not rec then return end
+        local existingNames = Bastion.buildNameSet(rec.settlers)
+        local npc  = Bastion.generateNPC(existingNames)
+        -- Pick any role at random for variety
+        local roleKeys = {}
+        for k in pairs(Bastion.ROLES) do table.insert(roleKeys, k) end
+        local role = Bastion.pickRandom(roleKeys)
+        local settler = {
+            id            = generateSettlerID(),
+            name          = npc.name,
+            isMale        = npc.isMale,
+            role          = role,
+            skillLevel    = npc.skillLevel,
+            traitTag      = npc.traitTag,
+            backstory     = npc.backstory,
+            mood          = "Content",
+            ownerUsername = username,
+        }
+        table.insert(rec.settlers, settler)
+        Bastion.addLog(rec,
+            string.format("[Admin] %s arrived as %s (skill %d). %s.",
+                settler.name, settler.role, settler.skillLevel, settler.traitTag),
+            "arrival")
+        saveRecord(username, rec)
+        print("[Bastion] Settler added for " .. username .. ": " .. settler.name)
     end
 end
 

@@ -180,6 +180,9 @@ Events.OnFillWorldObjectContextMenu.Add(function(playerIndex, context, worldObje
         adminSub:addOption("Add Settler", nil, function()
             sendClientCommand(player, Bastion.MOD_KEY, "AddSettler", {})
         end)
+        adminSub:addOption("Dump Building", nil, function()
+            sendClientCommand(player, Bastion.MOD_KEY, "Dump", {})
+        end)
     end
 end)
 

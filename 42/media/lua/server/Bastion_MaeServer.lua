@@ -570,10 +570,11 @@ end
 
 local function countBeds(rec)
     local cell = getCell()
-    if not cell then return 0 end
+    if not cell then print("[Bastion] countBeds: no cell") return 0 end
     local count = 0
     local bx, by, bz = rec.bx, rec.by, rec.bz
     local r = Bastion.SCAN_RANGE
+    print(string.format("[Bastion] countBeds: scanning %d,%d,%d r=%d", bx, by, bz, r))
 
     for x = bx - r, bx + r do
         for y = by - r, by + r do
@@ -583,16 +584,27 @@ local function countBeds(rec)
                 for i = 0, objs:size() - 1 do
                     local obj = objs:get(i)
                     local candidates = getBedCandidateNames(obj)
+                    -- Print every object that has at least one non-empty candidate name
+                    local anyName = false
+                    for _, n in ipairs(candidates) do
+                        if type(n) == "string" and n ~= "" then anyName = true end
+                    end
+                    if anyName then
+                        print("[Bastion] countBeds obj @ " .. x .. "," .. y
+                            .. ": " .. table.concat(candidates, " | "))
+                    end
                     for _, name in ipairs(candidates) do
                         if nameMatchesBed(name) then
                             count = count + 1
-                            break  -- only count this tile once
+                            print("[Bastion] countBeds MATCH: " .. tostring(name))
+                            break
                         end
                     end
                 end
             end
         end
     end
+    print("[Bastion] countBeds result: " .. count)
     return count
 end
 
@@ -1640,6 +1652,74 @@ local function onClientCommand(module, command, player, args)
             "arrival")
         saveRecord(username, rec)
         print("[Bastion] Settler added for " .. username .. ": " .. settler.name)
+
+    -- ── Dump ──────────────────────────────────────────────────────────────────
+    elseif command == "Dump" then
+        local rec = getRecord(username)
+        if not rec then
+            print("[Bastion] Dump: no record for " .. username)
+            return
+        end
+        local cell = getCell()
+        if not cell then print("[Bastion] Dump: no cell") return end
+
+        local bx, by, bz = rec.bx, rec.by, rec.bz
+        local r = Bastion.SCAN_RANGE
+        print(string.format("[Bastion] ── DUMP for %s  origin=%d,%d,%d  r=%d ──",
+            username, bx, by, bz, r))
+
+        local objCount = 0
+        for x = bx - r, bx + r do
+            for y = by - r, by + r do
+                local sq = cell:getGridSquare(x, y, bz)
+                if sq then
+                    local objs = sq:getObjects()
+                    for i = 0, objs:size() - 1 do
+                        local obj = objs:get(i)
+                        objCount = objCount + 1
+
+                        -- Java class name
+                        local ok0, cls = pcall(function()
+                            return tostring(obj:getClass():getSimpleName())
+                        end)
+                        local className = (ok0 and cls) or "?"
+
+                        -- Sprite name
+                        local spriteName = ""
+                        local ok1, spr = pcall(function() return obj:getSprite() end)
+                        if ok1 and spr then
+                            local ok2, sn = pcall(function() return spr:getName() end)
+                            if ok2 and type(sn) == "string" then spriteName = sn end
+                        end
+
+                        -- Display name
+                        local displayName = ""
+                        local ok3, dn = pcall(function() return obj:getName() end)
+                        if ok3 and type(dn) == "string" then displayName = dn end
+
+                        -- Object name
+                        local objName = ""
+                        local ok4, on = pcall(function() return obj:getObjectName() end)
+                        if ok4 and type(on) == "string" then objName = on end
+
+                        -- Has container?
+                        local hasCont = false
+                        local ok5, c = pcall(function() return obj:getItemContainer() end)
+                        hasCont = ok5 and c ~= nil
+
+                        -- Only print objects that have at least one non-empty name
+                        -- (skips blank floor/wall tiles that clutter the log)
+                        if spriteName ~= "" or displayName ~= "" or objName ~= "" then
+                            print(string.format(
+                                "[Bastion] Dump  %d,%d  class=%-20s  sprite=%-35s  name=%-25s  objName=%-20s  container=%s",
+                                x, y, className, spriteName, displayName, objName,
+                                tostring(hasCont)))
+                        end
+                    end
+                end
+            end
+        end
+        print(string.format("[Bastion] ── DUMP done  total objects scanned: %d ──", objCount))
     end
 end
 

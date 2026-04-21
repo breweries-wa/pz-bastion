@@ -28,6 +28,24 @@ Bastion.WATER_SOURCE_CACHE_DAYS = 7     -- re-scan for water sources every N in-
 Bastion.SCRAP_PER_INGOT  = 4    -- scrap items consumed per ingot produced
 Bastion.SCRAP_FLOOR      = 10   -- minimum scrap count the blacksmith will never touch
 
+-- ── Item type strings for settler production ──────────────────────────────────
+-- OQ #22: verify against B42 registry with getScriptManager():getItem(v)
+Bastion.ITEMS = {
+    PLANK           = "Base.WoodenPlank",
+    THREAD          = "Base.Thread",
+    BANDAGE_STERILE = "Base.BandageSterile",
+    METAL_BAR       = "Base.MetalBar",
+    EGG             = "Base.Egg",
+    MILK            = "Base.MilkCarton",
+    FISH            = "Base.FishFreshSmall",
+    VEGETABLE       = "Base.Tomato",
+    BERRY           = "Base.BlackBerries",
+}
+
+-- Consumption per settler per day (item counts)
+Bastion.FOOD_ITEMS_PER_SETTLER_PER_DAY  = 1
+Bastion.WATER_ITEMS_PER_SETTLER_PER_DAY = 1
+
 -- ── Noise budgets ─────────────────────────────────────────────────────────────
 
 Bastion.NOISE_BUDGETS       = { Silent=1, Quiet=3, Normal=6, Loud=12 }

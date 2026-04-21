@@ -143,6 +143,26 @@ function BastionOverviewPanel:populate(player)
     else                       nr, ng, nbl = 1.0, 0.35, 0.35 end
     row(string.format("Noise:     %d / %d  [%s]", ns, nb, nk), nr, ng, nbl)
 
+    -- Storage weight
+    if rec.storageWeightMax and rec.storageWeightMax > 0 then
+        local pct = (rec.storageWeightCurrent or 0) / rec.storageWeightMax
+        local sr, sg, sb
+        if     pct < 0.8  then sr, sg, sb = 0.4, 1.0, 0.4
+        elseif pct < 1.0  then sr, sg, sb = 1.0, 0.9, 0.35
+        else                   sr, sg, sb = 1.0, 0.35, 0.35 end
+        row(string.format("Storage:   %.1f / %.1f kg",
+            rec.storageWeightCurrent or 0, rec.storageWeightMax), sr, sg, sb)
+    end
+
+    -- Bed count
+    if rec.bedCount ~= nil then
+        local numSettlers = #settlers
+        local br, bg, bb
+        if rec.bedCount >= numSettlers then br, bg, bb = 0.4, 1.0, 0.4
+        else                               br, bg, bb = 1.0, 0.9, 0.2 end
+        row(string.format("Beds:      %d / %d", rec.bedCount, numSettlers), br, bg, bb)
+    end
+
     if rec.happiness then row(string.format("Happiness: %d", rec.happiness)) end
     if rec.resolve   then row(string.format("Resolve:   %d", rec.resolve))   end
     if rec.education and rec.education > 0 then

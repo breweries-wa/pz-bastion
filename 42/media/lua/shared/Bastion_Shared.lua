@@ -12,6 +12,7 @@ Bastion.VERSION  = 1
 -- ── Tuning ────────────────────────────────────────────────────────────────────
 
 Bastion.SCAN_RANGE                   = 25    -- tiles around bx,by to scan for containers
+Bastion.MAX_FLOOR                    = 7     -- highest z-level scanned (PZ supports 0-7)
 Bastion.MAX_LOG_ENTRIES              = 200
 Bastion.CALORIES_PER_SETTLER_PER_DAY = 2000
 Bastion.WATER_PER_SETTLER_PER_DAY    = 4     -- units per settler per day

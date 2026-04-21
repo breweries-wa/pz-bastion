@@ -73,12 +73,13 @@ local function scanContainers(rec)
         weight       = { current=0, max=0 },
     }
 
-    local bx, by, bz = rec.bx, rec.by, rec.bz
+    local bx, by = rec.bx, rec.by
     local r = Bastion.SCAN_RANGE
 
+    for z = 0, Bastion.MAX_FLOOR do
     for x = bx - r, bx + r do
         for y = by - r, by + r do
-            local sq = cell:getGridSquare(x, y, bz)
+            local sq = cell:getGridSquare(x, y, z)
             if sq then
                 local objs = sq:getObjects()
                 for i = 0, objs:size() - 1 do
@@ -86,7 +87,7 @@ local function scanContainers(rec)
                     if obj and obj.getContainer then
                         local container = obj:getContainer()
                         if container then
-                            local key = x .. "," .. y .. "," .. bz
+                            local key = x .. "," .. y .. "," .. z
                             local isPrivate = rec.privateContainers
                                            and rec.privateContainers[key]
                             if not isPrivate then
@@ -125,7 +126,7 @@ local function scanContainers(rec)
                 end
             end
         end
-    end
+    end end  -- z loop
     return result
 end
 
@@ -216,11 +217,12 @@ local function hasWaterSource(rec)
 
     local r    = Bastion.getSetting(rec, "WaterCarrier", "collectRadius") or 50
     local step = Bastion.WATER_SOURCE_SCAN_STEP
-    local bx, by, bz = rec.bx, rec.by, rec.bz
+    local bx, by = rec.bx, rec.by
 
+    for z = 0, Bastion.MAX_FLOOR do
     for x = bx - r, bx + r, step do
         for y = by - r, by + r, step do
-            local sq = cell:getGridSquare(x, y, bz)
+            local sq = cell:getGridSquare(x, y, z)
             if sq then
                 local objs = sq:getObjects()
                 if objs then
@@ -242,7 +244,7 @@ local function hasWaterSource(rec)
                 end
             end
         end
-    end
+    end end  -- z loop
     return false
 end
 
@@ -250,11 +252,12 @@ local function hasHeatSource(rec)
     local cell = getCell()
     if not cell then return false end
     local r = Bastion.SCAN_RANGE
-    local bx, by, bz = rec.bx, rec.by, rec.bz
+    local bx, by = rec.bx, rec.by
 
+    for z = 0, Bastion.MAX_FLOOR do
     for x = bx - r, bx + r do
         for y = by - r, by + r do
-            local sq = cell:getGridSquare(x, y, bz)
+            local sq = cell:getGridSquare(x, y, z)
             if sq and sq:getRoom() then
                 local objs = sq:getObjects()
                 for i = 0, objs:size() - 1 do
@@ -276,7 +279,7 @@ local function hasHeatSource(rec)
                 end
             end
         end
-    end
+    end end  -- z loop
     return false
 end
 
@@ -284,11 +287,12 @@ local function hasAnimals(rec)
     local cell = getCell()
     if not cell then return false end
     local r = Bastion.SCAN_RANGE
-    local bx, by, bz = rec.bx, rec.by, rec.bz
+    local bx, by = rec.bx, rec.by
 
+    -- Animals are always on z=0 (ground); no need to scan upper floors
     for x = bx - r, bx + r do
         for y = by - r, by + r do
-            local sq = cell:getGridSquare(x, y, bz)
+            local sq = cell:getGridSquare(x, y, 0)
             if sq then
                 local objs = sq:getObjects()
                 for i = 0, objs:size() - 1 do
@@ -572,25 +576,25 @@ local function countBeds(rec)
     local cell = getCell()
     if not cell then print("[Bastion] countBeds: no cell") return 0 end
     local count = 0
-    local bx, by, bz = rec.bx, rec.by, rec.bz
+    local bx, by = rec.bx, rec.by
     local r = Bastion.SCAN_RANGE
-    print(string.format("[Bastion] countBeds: scanning %d,%d,%d r=%d", bx, by, bz, r))
+    print(string.format("[Bastion] countBeds: scanning %d,%d z=0-%d r=%d", bx, by, Bastion.MAX_FLOOR, r))
 
+    for z = 0, Bastion.MAX_FLOOR do
     for x = bx - r, bx + r do
         for y = by - r, by + r do
-            local sq = cell:getGridSquare(x, y, bz)
+            local sq = cell:getGridSquare(x, y, z)
             if sq then
                 local objs = sq:getObjects()
                 for i = 0, objs:size() - 1 do
                     local obj = objs:get(i)
                     local candidates = getBedCandidateNames(obj)
-                    -- Print every object that has at least one non-empty candidate name
                     local anyName = false
                     for _, n in ipairs(candidates) do
                         if type(n) == "string" and n ~= "" then anyName = true end
                     end
                     if anyName then
-                        print("[Bastion] countBeds obj @ " .. x .. "," .. y
+                        print("[Bastion] countBeds obj @ " .. x .. "," .. y .. "," .. z
                             .. ": " .. table.concat(candidates, " | "))
                     end
                     for _, name in ipairs(candidates) do
@@ -603,7 +607,7 @@ local function countBeds(rec)
                 end
             end
         end
-    end
+    end end  -- z loop
     print("[Bastion] countBeds result: " .. count)
     return count
 end
@@ -1665,13 +1669,14 @@ local function onClientCommand(module, command, player, args)
 
         local bx, by, bz = rec.bx, rec.by, rec.bz
         local r = Bastion.SCAN_RANGE
-        print(string.format("[Bastion] ── DUMP for %s  origin=%d,%d,%d  r=%d ──",
-            username, bx, by, bz, r))
+        print(string.format("[Bastion] ── DUMP for %s  origin=%d,%d,%d  r=%d  floors=0-%d ──",
+            username, bx, by, bz, r, Bastion.MAX_FLOOR))
 
         local objCount = 0
+        for z = 0, Bastion.MAX_FLOOR do
         for x = bx - r, bx + r do
             for y = by - r, by + r do
-                local sq = cell:getGridSquare(x, y, bz)
+                local sq = cell:getGridSquare(x, y, z)
                 if sq then
                     local objs = sq:getObjects()
                     for i = 0, objs:size() - 1 do
@@ -1711,14 +1716,15 @@ local function onClientCommand(module, command, player, args)
                         -- (skips blank floor/wall tiles that clutter the log)
                         if spriteName ~= "" or displayName ~= "" or objName ~= "" then
                             print(string.format(
-                                "[Bastion] Dump  %d,%d  class=%-20s  sprite=%-35s  name=%-25s  objName=%-20s  container=%s",
-                                x, y, className, spriteName, displayName, objName,
+                                "[Bastion] Dump  %d,%d,%d  class=%-20s  sprite=%-35s  name=%-25s  objName=%-20s  container=%s",
+                                x, y, z, className, spriteName, displayName, objName,
                                 tostring(hasCont)))
                         end
                     end
                 end
             end
         end
+        end  -- z loop
         print(string.format("[Bastion] ── DUMP done  total objects scanned: %d ──", objCount))
     end
 end

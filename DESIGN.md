@@ -1,5 +1,5 @@
 # Bastion — Design Document
-> Project Zomboid Build 42 Mod | v1.2
+> Project Zomboid Build 42 Mod | v2.0
 
 ---
 
@@ -86,9 +86,6 @@ What PZ's Lua modding API can and cannot do.  These are hard limits, not design 
 
 ### 2.1 Truly Impossible (Java-side, no Lua exposure)
 
-**Animated, pathfinding NPCs.**
-PZ's character movement, pathfinding, and animation systems are Java.  There is no Lua API to create a walking, animated NPC.  The B42 team is building a native NPC system, but it is not yet moddable.  Until that changes, settlers cannot physically move through the world.  Every design element that implies a settler *doing something physically* — walking to the woodpile, patrolling a perimeter, following the player — is a simulation that exists only in the log.  Section 12 addresses what we can fake and how.
-
 **Modifying zombie noise/attraction AI.**
 Zombie pathfinding toward sound sources is Java.  We cannot make zombies genuinely react to settlement noise.  The simulation: schedule zombie spawns near the settlement at a rate derived from the noise score.  The effect is the same from the player's perspective; the mechanism is different.
 
@@ -111,8 +108,11 @@ Modifying how fast the player reads a skill book requires a client-side tick hoo
 
 ### 2.3 Feasible but With Known Risks
 
-**Item spawning in containers (virtual yield claiming).**
-The server can call `container:addItem()` to place items in world containers.  Risk: finding the right container, handling full containers, ensuring the item type string is valid.  This is Phase 3 work.  For now, virtual yield is tracked in ModData and displayed; the player cannot claim it as physical items yet.
+**Animated, pathfinding NPCs.**
+The Bandits mod (workshop ID 3268487204) proves this is achievable in B42: NPCs are `IsoZombie` instances with zombie AI disabled, a Lua brain stored in ModData, and PZ's own pathfinding and animation system doing the movement.  This is not Truly Impossible — it is deferred to a visual-only phase.  See Section 12.
+
+**Item spawning in containers.**
+The server can call `container:addItem()` to place items in world containers.  Risk: targeting the right container, handling full containers, ensuring item type strings are valid.  All production tasks that create items depend on this.  Item type strings for each role must be verified against the B42 registry before that role's production step is implemented.
 
 **Item registry performance.**
 Iterating every container in the settlement on every tick is fine at small scale.  At large settlements it may cause frame hitches.  The registry is built with caching and does not scan the world more than once per tick.
@@ -130,7 +130,7 @@ Scanning 50-tile radius for water sources at every tick would be expensive.  Cac
 
 ### 2.5 The Consequence for Design Language
 
-Any place in this document that describes a settler *doing* something physically should be understood as shorthand for: **the tick runs, the log records it, the outcome is applied.**  "Timmy walked to the treeline and chopped wood" means "the Woodcutter tick ran, a plank count was added to virtual yield, and a log entry was written."  There is no Timmy walking anywhere.  This is not a limitation to apologize for — it is the design.  The log is the simulation.
+Any place in this document that describes a settler *doing* something physically should be understood as shorthand for: **the tick runs, the log records it, the outcome is applied.**  "Timmy walked to the treeline and chopped wood" means "the Woodcutter task ran, plank items were added to storage, and a log entry was written."  There is no Timmy walking anywhere — until Section 12's later visual phase.  This is not a limitation to apologize for — it is the design.  The log is the simulation.
 
 ---
 
@@ -171,34 +171,85 @@ The visualization is client-side only — no server communication is needed, sin
 
 ## 4. The Settlement Tick
 
-Settlers don't visibly walk around performing tasks.  Instead, the simulation advances on a **settlement tick** — once per in-game day.  On each tick, each settler with an assigned role performs their function invisibly and the result is logged.
+The simulation advances once per in-game day.  Each tick has four sequential phases that complete in order.
 
-### 4.1 How the Tick Works
+### 4.1 Phase 1 — Consumption
 
-On each tick, for each settler:
-1. Check if their role's requirements are met (resources available, tools present, skill sufficient, resource floor not hit, cap not reached)
-2. If yes: apply the effect (add to virtual yield, update scores, debit from settler water pool)
-3. If no: log a shortage or idle message — never silently skip
-4. Append a log entry
+Settlers eat and drink.  This phase runs unconditionally — regardless of how much work capacity exists, settlers have needs.
 
-### 4.2 Log Message Style
+Daily food and water are calculated from current settler count and deducted from community storage.  The consumption pass leaves storage in its post-consumption state before Phase 2 begins.
+
+**Consequence triggers:**
+
+| Deficit | Immediate | Prolonged |
+|---------|-----------|-----------|
+| Food gap | Happiness drops | Struggling → Critical → departure → death |
+| Water gap | Happiness drops (faster escalation than food) | Struggling → Critical → departure → death |
+
+Deficits are logged with enough specificity to act on: `Settlement ran short on food (3 of 6 settlers fed). Happiness declining.`
+
+### 4.2 Phase 2 — Queue Building
+
+After consumption, the tick scans current storage and bastion state and builds the prioritized work queue.
+
+**A task only appears on the queue if ALL of the following are true:**
+- The bastion has sufficient specialty ranks for the task (see Section 6.2)
+- Required input items exist in storage
+- Required work site is present (if the task needs one)
+- Output is not already at its configured cap
+
+Tasks that cannot run this tick are absent from the queue.  The log records why expected tasks were skipped.
+
+**Priority tiers** are assigned based on current need relative to target levels:
+
+| Tier | Condition |
+|------|-----------|
+| **Urgent** | Resource below 50% of daily requirement |
+| **High** | Resource below 100% — not meeting daily need |
+| **Normal** | Resource below 200% target — building a buffer |
+| **Low** | Resource above buffer — low marginal value this cycle |
+
+Example: water in storage covering less than half the daily need → water collection is Urgent.  Once storage exceeds twice the daily need → water collection drops to Low.
+
+### 4.3 Phase 3 — Work Unit Calculation
+
+Each settler contributes work units to the tick's labor budget.  Units reflect available effort, reduced by poor mood, illness, or low resolve.
+
+| Mood State | Work Unit Contribution |
+|------------|----------------------|
+| Content | 1.0 |
+| Struggling | 0.5 |
+| Critical | 0.1 |
+
+**Total work units** = sum of all settler contributions for this tick.
+
+Specialty ranks do not affect work unit count.  A highly-ranked Cook and a low-ranked one contribute the same units — ranks determine what tasks are *available*, units determine how much *gets done*.
+
+### 4.4 Phase 4 — Work Execution
+
+Tasks execute from the queue in priority order, highest first.  Each task costs one work unit.  Execution continues until the work unit budget is exhausted or the queue empties.
+
+Tasks not reached this cycle are logged: `Work units exhausted — N tasks deferred.`
+
+Produced items are placed into available community storage containers.  If storage is at weight capacity, production tasks that would add items are excluded from the queue in Phase 2.
+
+### 4.5 Log Message Style
 
 Short, named, specific.  The player should be able to read the log and understand exactly what happened without inferring.
 
 ```
-Timmy collected 2 logs from the woodpile.
-Timmy — plank stock at cap (60). No logs consumed.
-Rosa prepared 4 meals (3 from perishables).
-Rosa couldn't cook — settler water supply too low for washing.
-Dr. Okafor sterilized 5 bandages. Stock: 17/20.
-Dr. Okafor — no heat source in bastion; can't sterilize.
-Sarah collected and boiled water. +2.0 days to pool (6.5 / 21.0).
-Sarah couldn't collect water — no water source found nearby.
-Marcus — thread stock is at cap (50). No rags consumed.
+Settlement consumed: 6 meals, 12 units of water.
+Rosa cooked 4 meals from perishables. [shelf B]
+Dr. Okafor sterilized 5 bandages. [medical kit]
+Dr. Okafor — no heat source in bastion; bandages skipped.
+Sarah collected and boiled water. +6 units added to storage.
+Sarah — no pot in storage; water collection skipped.
+Marcus — thread at cap. Rag picking skipped.
 [QUIET MODE] Woodcutting skipped — noise budget exceeded.
+Work units exhausted — 3 tasks deferred (cooking tier 2, trapping, foraging).
 ```
 
-### 4.3 Tick Frequency
+### 4.6 Tick Frequency
 
 Once per in-game day.  The last tick date is persisted in the settlement record so reloading mid-day does not cause a double-fire.
 
@@ -213,10 +264,9 @@ Community-wide metrics that influence settler behavior, production, and arrival 
 | Score | What It Measures | Critical Effect |
 |-------|-----------------|-----------------|
 | **Food** | Days of food remaining at current consumption | Below 3 days: warning logged; below 1: Happiness drops |
-| **Water** | Days of water (containers + settler pool) | Below 2 days: Doctor and Farmer skip water-using steps |
-| **Settler Water Pool** | Settler-managed water buffer (days) | Fills from WaterCarrier role; drawn by Doctor, Farmer, Tailor |
-| **Noise** | Current noise output vs. player-set budget | Over budget: noisy roles suppressed |
-| **Storage** | Available community container capacity | Full: virtual yield can't be deposited |
+| **Water** | Days of water in community storage at current consumption | Below 2 days: Doctor and Farmer skip water-requiring tasks |
+| **Noise** | Current noise output vs. player-set budget | Over budget: noisy tasks suppressed |
+| **Storage** | Current weight vs. total weight capacity of all community containers | Above 80%: warning shown; at 100%: production tasks blocked |
 
 ### 5.2 Subjective Scores
 
@@ -241,10 +291,12 @@ Food: 8 days  [OK]
   + Rosa cooking (reduces waste)       +1 day
   - 6 settlers consuming               -0.8/day
 
-Water: 6.2 days  (1.5 from settler pool)  [OK]
+Water: 6.2 days  [OK]
   + Sarah (Water Carrier)              +2.0/day
   - Doctor sterilizing bandages        -0.8/day
   - Farmer watering crops              -1.0/day
+
+Storage: 247 / 450 kg  [OK]
 
 Noise: 4 / 6  [OK]
   + Woodcutter chopping                +3
@@ -260,15 +312,31 @@ The contributor breakdown is a Phase 3 feature.  Phase 1–2 show the score valu
 
 ### 6.1 Design Principle
 
-Settlers exist in the settlement and in the log.  The player learns who they are through tick reports, the Settlers tab in the Bastion Window, and right-click dialogue.  The roster is read-only from the player's perspective; settler management (adding, removing, editing roles) is an admin-only function accessed via chat commands or the debug panel.
+Settlers exist in the settlement and in the log.  The player learns who they are through tick reports and the Settlers tab in the Bastion Window.  The roster is read-only from the player's perspective; settler management (adding, removing) is an admin-only function accessed via chat commands or the debug panel.
 
-### 6.2 Skill-Based Roles
+### 6.2 Specialist Ranks
 
-Every PZ skill maps to a specialist role.  A settler assigned to a role performs tick actions appropriate to their **skill level** — higher skill means more efficient recipes, better output, and less waste.  Roles with a minimum skill requirement are only usable by settlers who qualify.
+Settlers contribute **specialty ranks** to the bastion's total capability.  Ranks determine what tasks the bastion can perform — not how much work gets done this tick.
 
-**Example:** A Cook at skill level 1 prepares basic meals from perishables only.  A Cook at level 5 can preserve food in jars, reducing waste.  A Cook at level 8 produces high-nutrition meals that provide a Happiness bonus.
+Each settler has 1–4 ranks in their primary specialty, reflecting their background:
 
-Skill levels improve over time — settlers learn by doing.  (Advancement rate: Phase 3 feature.)
+| Ranks | Archetype |
+|-------|-----------|
+| 1 | Hobbyist or incidental experience (burger flipper → cooking) |
+| 2 | Regular practitioner (housewife → cooking) |
+| 3 | Journeyman — did this for a living |
+| 4 | Professional or expert (chef → cooking) |
+
+**The bastion's total ranks in a specialty = sum across all settlers with that specialty.**
+
+Tasks have minimum rank thresholds.  Examples for cooking:
+- Basic meal prep from perishables: 1+ cooking ranks
+- Food preservation (jarring): 8+ cooking ranks
+- High-nutrition meals (Happiness bonus): 12+ cooking ranks
+
+Adding settlers with relevant backgrounds directly expands what the settlement can do.  No separate skill advancement system is needed — capability grows by recruiting better specialists.
+
+**Ranks are separate from work units.**  A settler with 4 cooking ranks who is Struggling still unlocks advanced cooking tasks — they just contribute fewer work units to execute them.
 
 ### 6.3 Per-Role Settings
 
@@ -371,6 +439,26 @@ Work sites are physical objects required for certain roles to operate at full ef
 
 *Other roles have no work site requirement.*
 
+### 6.8 Work Units
+
+Work units are the settlement's daily labor budget, calculated fresh each tick during Phase 3.
+
+**Base contribution:** 1 work unit per settler per tick at Content mood.
+
+**State modifiers:**
+
+| Mood State | Work Unit Contribution |
+|------------|----------------------|
+| Content | 1.0 |
+| Struggling | 0.5 |
+| Critical | 0.1 |
+
+**Total work units** = sum of all settler contributions.  This is the budget consumed during Phase 4.  Each task costs one work unit.
+
+Specialty ranks do not affect work unit count.  Ranks determine what tasks are *available*; mood and health determine how much *gets done*.
+
+> ⚑ OPEN: Is every task always 1 work unit, or do complex tasks (blacksmithing, surgery) cost more?  Starting assumption is 1 unit per task.  See Open Question #31.
+
 ---
 
 ## 7. NPC Generation
@@ -381,21 +469,21 @@ Bastion uses PZ's RNG patterns for all settler generation.  No hand-authored cha
 
 **Name:** First + last from gender-appropriate pools (30 male, 30 female, 40 last names).
 
-**Role:** Fill open community needs first.  Assign randomly if no gap.
+**Role / Specialty:** Fill open community needs first.  Assign randomly if no gap.
 
-**Skill Level:** `ZombRand(4) + 1` (1–4).  Role-appropriate range tuning: Phase 3.
+**Specialty Ranks:** 1–4, assigned based on backstory archetype.  The occupation drives the rank: a professional chef gets 4 cooking ranks, a housewife gets 2, someone who worked a food counter gets 1.  Most settlers fall at 1–2 ranks; 4-rank specialists are rare.
 
 **Trait Tags:** 1 tag from a pool of ~23.  Narrative flags, not stat modifiers.  Appear in arrival log and Settlers tab profile.
 
-**Backstory Seed:** One generated line.  `[occupation] from [PZ location] who [circumstance]`.  Shown in arrival log; available in Settlers tab.
+**Backstory Seed:** One generated line.  `[occupation] from [PZ location] who [circumstance]`.  Shown in arrival log; available in Settlers tab.  The occupation implies the specialty rank.
 
 **Mood State:**
 
-| State | Effect |
-|-------|--------|
-| `Content` | Normal tick contribution |
-| `Struggling` | Reduced output; flagged in log |
-| `Critical` | No contribution; leaves if unresolved |
+| State | Work Unit Contribution | Effect |
+|-------|----------------------|--------|
+| `Content` | 1.0 | Full contribution |
+| `Struggling` | 0.5 | Flagged in log |
+| `Critical` | 0.1 | Leaves if unresolved |
 
 ### 7.2 Death Weight
 
@@ -421,58 +509,38 @@ All containers within the settlement boundary are **community storage by default
 
 The scanner walks all objects within the bastion radius of the anchor square.
 
-### 8.2 Settler Water Pool
+**Storage Weight Capacity**
 
-Settlers manage their own water supply independent of the player's containers.  The pool is measured in settler-days of safe drinking water.
+The bastion tracks total weight capacity vs. current stored weight across all community containers, displayed in the Overview as `current / maximum kg` (e.g., `247 / 450 kg`).
 
-**How the pool works:**
-- WaterCarrier role adds to the pool each tick (requires: water source within scan radius, heat source in bastion, pot in shared storage)
-- Roles that need water (Doctor, Farmer, Tailor) draw from the pool — if it is empty, their water-requiring step is skipped with a warning log
-- The pool is capped at 21 days (a 3-week hard ceiling)
-- The pool is **separate from player containers** — settler roles never touch the water in the player's barrels or bottles
-- Water displayed in the Overview = actual container water + settler pool combined
+- At ~80% capacity: warning shown — "Storage getting full; new containers needed."
+- At 100% capacity: production tasks that would add items are excluded from the Phase 2 queue.
 
-**World-state cache:**  Scanning for water sources and heat sources on every tick would be expensive.  Results are cached and refreshed every 7 in-game days.  Infrastructure status is shown in the Overview tab so the player can see why the WaterCarrier isn't working.
+### 8.2 Water in Storage
 
-**WaterCarrier output per tick:** 2.0 + (skill level − 1) × 0.3 settler-days
+Settlers drink water from community storage.  The WaterCarrier role produces actual filled water containers each tick, placed into community storage like any other produced item.
 
-### 8.3 Virtual Yield System
+The water score reflects days of water remaining at current consumption rate, calculated from the water items actually present in community containers.
 
-Settlers produce output that accumulates as **pending production** until the player claims it.  This is a Phase 2 tracking system; physical item spawning is Phase 3.
+**World-state cache:** Water source and heat source presence is expensive to scan every tick.  The result is cached and refreshed every 7 in-game days.  Infrastructure status is shown in the Overview tab so the player can see why the WaterCarrier task is absent from the queue.
 
-**Current virtual yield keys:**
+**WaterCarrier output per tick:** 2.0 + (specialty ranks − 1) × 0.3 water-units produced per work unit spent.
 
-| Key | Description | Produced By |
-|-----|-------------|-------------|
-| `thread` | Thread units (picked from rags) | Tailor |
-| `bandages` | Sterilized bandages | Doctor |
-| `meals` | Prepared meals (count) | Cook |
-| `fish` | Fresh fish | Fisher |
-| `meat` | Trap/hunt catch | Trapper, Hunter |
-| `planks` | Sawn planks | Woodcutter |
-| `firewood` | Firewood loads | Woodcutter |
-| `ingots` | Metal ingots | Blacksmith |
-| `eggs` | Eggs | Rancher |
-| `milk` | Milk units | Rancher |
-| `savedSeeds` | Seeds reserved for replanting | Farmer |
+> ⚑ OPEN: Natural water terrain (ponds, rivers): B42-safe detection method?  `sq:isWater()` throws a Java exception escaping pcall.  See Open Question #26.
 
-All yield entries are capped by the role's configured cap setting.  Once a cap is reached, the settler logs "stock at cap" and stops consuming the input resource.
-
-**Phase 3: Claiming yield** — a "Collect Production" action in the Bastion Window will spawn the accumulated virtual yield as actual items into a designated output container in the settlement.  The exact item type strings and container targeting logic are deferred to Phase 3 design.
-
-### 8.4 Kitchen Awareness (Phase 3)
+### 8.3 Kitchen Awareness (Phase 3)
 
 The Cook specialist will be aware of appliance locations (stoves, ovens) within the settlement.  Food items drift toward containers near cooking appliances over time.  The player doesn't need to manually sort the pantry.
 
 > ⚑ OPEN: "Drift" is a soft mechanic.  Needs bounds so it doesn't move everything to one spot.  See Open Question #2.
 
-### 8.5 Private Container Flagging
+### 8.4 Private Container Flagging
 
 - Right-click any container inside the settlement → "Mark as Private" / "Mark as Shared"
-- Private containers are invisible to the simulation; specialists never draw from them
+- Private containers are invisible to the simulation; specialists never draw from them or place items into them
 - Private/shared state persists across sessions
 
-### 8.6 Food Management
+### 8.5 Food Management
 
 - Cook uses perishable food first (fresh and raw items before shelf-stable)
 - Dry goods are excluded by default; the setting can be unlocked to allow them
@@ -544,16 +612,17 @@ A resizable, draggable tabbed panel.  Auto-refreshes every ~5 seconds while open
 #### Tabs
 
 **Overview**
-Settlement status at a glance.  Currently shows:
-- Settlers count, Food days, Water days (with settler pool breakdown), Noise score/budget
+Settlement status at a glance.  Shows:
+- Settlers count, Food days, Water days, Noise score/budget, Storage weight (`247 / 450 kg`)
 - Infrastructure flags: water source found/not found, heat source found/not found, animals detected
-- Settler production (virtual yield) — pending items accumulated since last claim
+- Bed count vs. settler count (deficit flagged in yellow)
+- Work queue preview: top 5 tasks queued for the next tick, with priority tier
 - Last 3 log entries
 
 *Phase 3 target: contributor breakdown below each score.*
 
 **Settlers**
-Full roster.  Each row: name, role, mood, skill level.  Clicking a row shows settler profile inline (backstory, trait, mood detail).
+Full roster.  Each row: name, specialty, mood, rank.  Clicking a row shows settler profile inline (backstory, trait, mood detail).
 
 **Log**
 Full settlement log, scrollable.  Color-coded by entry type:
@@ -580,7 +649,7 @@ Newest entries at bottom (scroll-to-bottom on open).  Max 200 entries; oldest pr
 
 ### 10.3 Right-Click Menu
 
-**Anywhere inside the bastion (no bastion exists):**
+**Anywhere (no bastion exists):**
 - `Establish Bastion` — creates the settlement; opens Bastion Window immediately.
 
 **Anywhere inside the bastion (bastion exists):**
@@ -588,10 +657,6 @@ Newest entries at bottom (scroll-to-bottom on open).  Max 200 entries; oldest pr
 
 **On a container inside the bastion:**
 - `Mark as Private` / `Mark as Shared`
-
-**On a settler mannequin:**
-- One-liner dialogue (mood-appropriate ambient flavor)
-- "View profile" — prints backstory/trait to chat
 
 That's the full right-click surface.  Noise budget, role management, and disband are inside the window.
 
@@ -663,27 +728,34 @@ Separate window, `Ctrl+Shift+B`, only renders if `isDebugEnabled()`.  Tabs: Stat
 
 ## 12. NPC Representation
 
-### 12.1 The Problem
+### 12.1 Design Principle
 
-Bastion's simulation is invisible.  Specialists work, the log records it — but if no physical NPCs are present, the settlement feels empty.
+Settlers exist in the log and in the Bastion Window.  In early phases there is nothing physical representing them in the world.  The settlement feels alive through the quality of its log, not through figures standing around.
 
-### 12.2 Options
+This is not a compromise — it is the design.  See Section 2.5.
 
-**Option A: Mannequins (current)**  Proven.  Completely static.  Credible as a Phase 1 placeholder.
+### 12.2 Visual Representation (Phase 4+)
 
-**Option B: Mostly Indoors**  Settlers are implied rather than shown.  Sounds come from inside buildings.
+When the core simulation is stable and playtested, settlers can be given physical presence using the IsoZombie hijacking technique proven by the Bandits mod.
 
-**Option C: One Visible Spokesperson Per Building**  One mannequin near each building entrance.  Sounds come from inside.
+**How it works:**
+- Each settler is an `IsoZombie` instance with zombie AI disabled and a Lua brain stored in ModData
+- PZ's own pathfinding (`PathFindBehavior2`), walk animations, and clothing system do the work
+- The brain persists across saves and syncs to clients via GlobalModData
+- The settler wanders within the bastion radius on a simple ambient loop
 
-**Option D: Wait for B42 NPC System**  The developers are building this for B43.
+**Key distinction:** This layer is **purely visual**.  The tick simulation runs independently.  The walking figure represents what the log says is already happening — it does not do the work.
 
-**Option E: Modified IsoZombie**  Fragile; not recommended.
+**Prerequisites before implementation:**
+- Core simulation stable and playtested through Phase 3
+- Settler brain structure compatible with IsoZombie ModData pattern
+- Simple patrol program (wander within radius, idle at work site locations)
+- Clothing and appearance built from settler generation data
+- Protection from player and zombie aggression (flag approach used by Bandits mod)
 
-### 12.3 Current Recommendation
+### 12.3 Phase Timeline
 
-**Option A (mannequins) for Phase 1–2.  Option B+C for Phase 3.**
-
-One mannequin per settler for now.  When B42's ambient sound API is confirmed, switch to one spokesperson per building with sounds implying activity inside.
+No NPC spawning in Phases 1–3.  Walking settlers are a Phase 4+ feature added only after the simulation beneath them is worth animating.
 
 ---
 
@@ -720,95 +792,76 @@ Borrow: Workers exist and matter narratively, but you rarely see individuals.
 **Goal:** Prove the core loop works end-to-end.
 
 - [x] Settlement boundary: tile radius from anchor square
-- [x] Settler spawning: mannequin placed at establish, removed at collapse, persists across sessions
-- [x] NPC generation: name, role, skill level, trait tag, backstory seed
+- [x] NPC generation: name, role, specialty ranks, trait tag, backstory seed
 - [x] Community storage: opt-out container system, item registry (general / refrigerated / frozen)
 - [x] Settlement tick: once per in-game day, guarded against double-fire on reload
 - [x] **Bastion Window**: Overview, Settlers, Log, Settings tabs; draggable and resizable
 - [x] Food and water tracking displayed in Overview
 - [x] Noise score with player budget control (Silent / Quiet / Normal / Loud) via Settings tab
 - [x] Admin chat commands (`/bastion help/status/tick/reset/addlog`)
-- [x] Right-click: Establish Bastion (opens window) / Check on Bastion
-- [x] Container mark-private / mark-shared via right-click
+- [x] Right-click: Establish Bastion / Check on Bastion / Mark container private/shared
 - [x] ModData persistence across save/load
 
----
-
-### Phase 2 — Settler Purpose: Tedium Reduction 🔄 IN PROGRESS
-
-**Goal:** Make settlers meaningfully take over B42 grind tasks.  Every role has concrete output, resource floors, and clear failure logging.
-
-#### Implemented ✅
-
-- [x] **Settler water pool**: separate from player containers, capped at 21 days
-- [x] **WaterCarrier role**: collect + boil water; requires water source + heat source + pot; skill-scaled yield
-- [x] **Per-role settings**: named caps and floors per role, adjustable via admin command
-- [x] **Virtual yield tracking**: pending output per role accumulates until claimed; shown in Overview
-- [x] **Role settings admin command**: server-side validation of role name and setting key
-- [x] **World-state cache**: water source, heat source, and animal presence scanned on establish and every 7 days; shown in Overview
-- [x] **Resource-floor-aware role ticks:**
-  - Tailor: washes dirty rags (draws from settler water pool), picks thread up to cap
-  - Doctor: sterilizes bandages up to cap; prorates batch when water is short; requires heat source
-  - Cook: perishables-first ordering; dry goods excluded by default; auto-sizes meals to settler count + 1
-  - Farmer: costs 1 water-day per tick; saves seed fraction before reporting yield
-  - Woodcutter: respects plank cap; secondary fire-stoking when enabled
-  - Fisher: requires bait + fishing line from storage; respects fish stock cap
-  - Blacksmith: scrap → ingots; never touches the scrap floor reserve; requires heat source; skill-gated throughput
-  - Rancher: detects animals in radius; grain floor prevents feed depletion; produces eggs/milk yield
-  - Mechanic: generator refueling (lower skill) + vehicle parts check (higher skill)
-  - Trapper: bait check before reporting catch (abstract yield for now)
-- [x] Overview tab: water pool breakdown, infrastructure flags, virtual yield display
-
-#### Remaining Phase 2 Work 📋
-
-- [ ] **Role settings UI** in Settings tab: editable fields for caps and floors per role.  Currently only settable via admin command.
-- [ ] **Teacher reading speed multiplier**: client-side hook; applies a reading time modifier when an active Teacher is in the settlement and the player is inside the bastion.  API unverified — see Open Question #20.
-- [ ] **Trapper trap scanning**: scan for placed traps in a ring *outside* the bastion radius.  Distance affects tick cost.  Design below.
-- [ ] **Phase 2 test plan execution** (see Section 15.2)
-
-#### Trapper Trap Scanning Design
-
-Traps must be placed **outside** the bastion's indoor zone to work (you don't trap your own living space).
-
-- Scan for placed traps in a ring from a minimum of 15 tiles to the trap scan radius (default 60) from the anchor square
-- Each trap within range is "checked" — yield rolled based on settler skill + trap type
-- Traps beyond 40 tiles cost 2 action points; settler has a daily action pool of 4 + skill level
-- Unchecked traps are noted in the log
-- Rebaiting: consume worms/berries/corn from shared storage per reset trap
-- Catch adds to the meat yield pending pool
+> **Cleanup needed:** Phase 1 code included IsoMannequin spawning (now removed from design) and a virtual yield tracking system (superseded by Phase 2 real-items model).  Both should be stripped in the next pass.
 
 ---
 
-### Phase 3 — Production Claiming, Score Depth & Bastion View 📋 PLANNED
+### Phase 2 — Real Simulation Loop 🔄 IN PROGRESS
 
-**Goal:** Make settler output tangible; deepen score feedback; bring the radius to life visually; implement bed and work site systems.
+**Goal:** Implement the full four-phase tick.  All settler actions consume and produce real items in storage.  Remove Phase 1 scaffolding (mannequins, virtual yield).
 
-**Design decisions needed before implementation:**
+#### Remaining Work 📋
 
-1. Virtual yield claiming: which container does output land in?  Options: nearest non-private container with space; a designated "settler output" container the player marks; the first container scanned.  Recommended: nearest non-private container with space, logged clearly.
-2. Item type strings: PZ item type names for thread (`Thread`), sterilized bandage (`BandageSterilized`?), ingot (`IronIngot`?).  Need verification against PZ B42 item registry.
-3. Settler skill advancement rate: once per N ticks where the role ran successfully.  N = 7 (once per week) as a starting point.
-4. Radius visualization: confirm `WorldToScreen` / overlay draw hook available in B42.  See Open Question #28.
-5. Bed sprite list: confirm sprite name substrings for all bed/cot/mattress types.  See Open Question #29.
-6. Work site recipe API: confirm `CraftRecipeManager` or equivalent.  See Open Question #30.
-7. Radius expansion formula: starting radius, step per settler, maximum.  See Open Question #27.
+- [ ] **Strip Phase 1 scaffolding**: remove IsoMannequin spawning code and virtual yield tracking
+- [ ] **Four-phase tick** (Section 4): consumption pass → queue building → work unit calculation → work execution
+- [ ] **Consumption pass**: deduct food and water items from storage per settler per day; apply consequences on deficit
+- [ ] **Work unit system**: sum settler contributions modified by mood state (Section 6.8)
+- [ ] **Priority queue**: build eligible task list from storage state + rank totals + work site presence; assign priority tiers (Section 4.2)
+- [ ] **Storage weight tracking**: scan all community containers for weight capacity and current weight; display `current / max kg` in Overview; warn at 80%; block production tasks at 100%
+- [ ] **Produced items land in storage**: each production task calls `container:addItem()` for its output; target = first available non-private container with remaining capacity
+- [ ] **Item type string verification**: verify all B42 item type strings for each role's input and output before implementing that role's production step (see Open Question #22)
+- [ ] **Resource-floor-aware tasks (all roles):**
+  - Tailor: consumes dirty rags, produces thread items; consumes water items (washing step)
+  - Doctor: consumes rags, produces sterilized bandages; requires water in storage + heat source
+  - Cook: consumes food items (perishables first), produces meal items; respects dry goods cap
+  - Farmer: consumes water and seed items, produces food items; retains seed fraction
+  - Woodcutter: consumes log items, produces plank items; secondary fire-stoking task
+  - Fisher: consumes bait + fishing line, produces fish items
+  - Blacksmith: consumes scrap above floor, produces ingot items; requires heat source
+  - Rancher: detects animals; consumes grain above floor; produces egg and milk items
+  - Mechanic: consumes fuel items (refueling task); consumes parts (maintenance task)
+  - Trapper: consumes bait, produces meat items; scans for placed traps in outer ring
+  - WaterCarrier: consumes empty containers + fuel, produces filled water containers; requires water source + heat source + pot
+- [ ] **Infrastructure flags** in Overview: water source, heat source, animals — cached every 7 days
+- [ ] **Bed counting**: sprite-name scan within radius; deficit shown in Overview (Section 6.6)
+- [ ] **Work site detection**: recipe-based scan per role type; no work site → productivity penalty (Section 6.7)
+- [ ] **Teacher chalkboard dependency**: Teacher task inactive if no chalkboard found within radius
+- [ ] **Phase 2 test plan** (Section 15.2)
+
+#### Trapper Design Note
+
+Traps must be placed outside the bastion radius to work.  Scan for placed traps in a ring from 15 tiles to the trap scan radius (default 60) from the anchor square.  Each trap is "checked" — yield rolled based on settler ranks + trap type.  Traps beyond 40 tiles cost 2 work units.  Rebaiting consumes bait items from storage.
+
+---
+
+### Phase 3 — Score Depth & Bastion View 📋 PLANNED
+
+**Goal:** Deepen score feedback; bring the radius to life visually; complete settler lifecycle.
+
+**Open questions to resolve before implementation:** OQ #27 (radius formula), #28 (WorldToScreen API), #29 (bed sprite names), #30 (work site recipe API).
 
 **Scope:**
 
-- [ ] **Radius visualization ("Bastion View")**: colored tile overlay + hover labels shown while Bastion Window is open (see Section 3.2)
-- [ ] **Dynamic radius expansion**: radius grows automatically with settler count (formula: Open Question #27)
-- [ ] **Bed counting system**: sprite-name scan within radius; deficit → Happiness penalty; shown in Overview (see Section 6.6)
-- [ ] **Work site detection**: recipe-based boolean scan per role; no site → productivity penalty; shown in Overview (see Section 6.7)
-- [ ] **Teacher chalkboard dependency**: Teacher inactive if no chalkboard found within radius
-- [ ] Virtual yield claiming: "Collect Production" action in Overview tab spawns yield as actual items
-- [ ] Score contributor breakdown in Overview (contributor table below each score)
-- [ ] Settler mood state triggers: food shortage → Struggling; prolonged Struggling → Critical; player interaction → improves
-- [ ] Death weight: death log entry uses name + trait tag
-- [ ] Settler arrival mechanics: new NPCs arrive based on Happiness / Resolve; arrival rate configurable
-- [ ] Skill advancement: settlers improve at their role over time
-- [ ] Teacher reading speed multiplier (if API confirmed; see Open Question #20)
-- [ ] Kitchen awareness: food drift toward cooking appliances
-- [ ] Expanded admin commands: `/bastion settler list/add/remove/mood/role`, `/bastion food/water`
+- [ ] **Radius visualization ("Bastion View")**: colored tile overlay + hover labels shown while window is open (Section 3.2)
+- [ ] **Dynamic radius expansion**: grows automatically with settler count (Section 3.1)
+- [ ] **Score contributor breakdown** in Overview (contributor table below each score)
+- [ ] **Settler mood state triggers**: food/water shortage → Struggling; prolonged → Critical; player interaction → recovery
+- [ ] **Death weight**: death log entry uses name + trait tag
+- [ ] **Settler arrival mechanics**: new settlers arrive based on Happiness / Resolve; arrival rate configurable
+- [ ] **Teacher reading speed multiplier** (if API confirmed; see Open Question #20)
+- [ ] **Kitchen awareness**: produced food lands nearest cooking appliances (Section 8.3)
+- [ ] **Per-role settings UI** in Settings tab
+- [ ] **Expanded admin commands**: `/bastion settler list/add/remove/mood`, `/bastion food/water`
 - [ ] Phase 3 test plan (to be written before implementation)
 
 ---
@@ -830,7 +883,8 @@ Traps must be placed **outside** the bastion's indoor zone to work (you don't tr
 - [ ] Per-role suspend in Settings tab
 - [ ] Firearms toggle for Defenders
 - [ ] Noisy work hours (daylight-only mode)
-- [ ] Debug panel (developer-only, `isDebugEnabled()` gated)
+- [ ] Debug panel (developer-only, debug mode gated)
+- [ ] **Walking NPC visual layer**: IsoZombie-based settlers with ambient patrol behavior within radius (Section 12)
 - [ ] Phase 4 test plan (to be written before implementation)
 
 ---
@@ -999,125 +1053,107 @@ All tests use a fresh single-player save with Bastion enabled.
 
 ### 15.2 Phase 2 Test Plan
 
-Run after Phase 1 tests pass.  Requires: bastion established, at least one settler of each tested role.
+Run after Phase 1 tests pass.  Requires: bastion established, relevant items in community storage.
 
-#### Group 8 — Settler Water Pool
+#### Group 8 — Consumption Pass
 
-**T8.1 — Pool shown in Overview**
-- *Pre:* Bastion established.
-- *Pass:* Overview shows "Water: X.X days" (may show "0.0 from settler pool" initially).
+**T8.1 — Food consumed from storage each tick**
+- *Pre:* Known quantity of food items in storage.  One settler.
+- *Steps:* Advance one day.
+- *Pass:* Food items reduced by one day's consumption.  Log confirms.
 
-**T8.2 — WaterCarrier requires all three conditions**
-- *Test A:* Assign WaterCarrier with no water source nearby, advance day.
-  *Pass:* Log warns "no water source found nearby."
-- *Test B:* Add pond tile nearby (or confirm existing), but no heat source, advance day.
-  *Pass:* Log warns "no heat source."
-- *Test C:* Add campfire/stove, but no pot in storage, advance day.
-  *Pass:* Log warns "has no pot in shared storage."
+**T8.2 — Water consumed from storage each tick**
+- *Pre:* Known quantity of water items in storage.  One settler.
+- *Steps:* Advance one day.
+- *Pass:* Water items reduced.  Log confirms.
 
-**T8.3 — WaterCarrier fills the pool when conditions met**
-- *Pre:* All three conditions met (water source + heat source + pot).
-- *Steps:* Assign WaterCarrier, advance day.
-- *Pass:* Settler water pool increases by ~2.0 + skill bonus.  Log confirms with "pool" numbers.
+**T8.3 — Food deficit triggers Happiness drop**
+- *Pre:* No food in storage.
+- *Steps:* Advance one day.
+- *Pass:* Log warns of deficit with settler count.  Happiness score drops.
 
-**T8.4 — Pool shown in Overview with breakdown**
-- *Pre:* T8.3 passed.  Pool > 0.
-- *Pass:* Overview shows "X.X days (Y.Y from settler pool)" for water.
+**T8.4 — Water deficit triggers faster consequence than food**
+- *Pre:* No water in storage.
+- *Steps:* Advance one day.
+- *Pass:* Log warns of water deficit.  Happiness drops more than equivalent food deficit.
 
-**T8.5 — Pool capped at WATER_POOL_MAX**
-- *Steps:* Run WaterCarrier for enough ticks to fill pool.
-- *Pass:* Log says "water pool is full (21.0 days)."  Pool does not exceed 21.
+**T8.5 — Consumption runs before queue; post-consumption state drives queue**
+- *Pre:* Just enough water for one day's consumption.  WaterCarrier conditions otherwise met.
+- *Steps:* Advance one day.
+- *Pass:* Water is consumed first; water collection task appears as Urgent in queue and executes that tick.
 
-**T8.6 — Water-consuming role draws from pool**
-- *Pre:* Pool is non-zero.  Doctor role assigned.
-- *Steps:* Advance day.
-- *Pass:* Pool decreases by Doctor's water cost.  Doctor log shows successful sterilization.
+#### Group 9 — Work Unit System
 
-**T8.7 — Water-consuming role skips when pool empty**
-- *Pre:* Pool = 0 (never filled).  Doctor role assigned.
-- *Steps:* Advance day.
-- *Pass:* Doctor log warns "settler water supply too low."  No bandages produced.  Player containers unaffected.
+**T9.1 — Work units equal settler count at Content mood**
+- *Pre:* 3 Content settlers.
+- *Pass:* Work unit budget for the tick = 3.  Log or debug confirms.
 
-**T8.8 — Infrastructure flags in Overview**
-- *Pass:* "Water source: found / NOT FOUND" and "Heat source: found / NOT FOUND" shown in Overview.  Accuracy matches world state.
+**T9.2 — Struggling settler contributes 0.5 units**
+- *Pre:* 2 Content settlers, 1 Struggling.
+- *Pass:* Work unit budget = 2.5.
 
-#### Group 9 — Resource Floors & Caps
+**T9.3 — Budget limits tasks executed**
+- *Pre:* 1 settler (1 unit budget).  Queue has 3 eligible tasks.
+- *Steps:* Advance one day.
+- *Pass:* 1 task executed.  2 tasks logged as deferred.
 
-**T9.1 — Tailor respects maxThread cap**
-- *Pre:* Tailor role assigned.  Clean rags in storage.  `maxThread = 50`.
-- *Steps:* Advance days until thread stock hits 50.
-- *Pass:* Log says "thread stock is at cap (50). No rags consumed."  No further rags consumed.
+#### Group 10 — Priority Queue
 
-**T9.2 — Tailor log warns when at cap**
-*Pass:* Cap message is clearly logged (not a silent skip).
+**T10.1 — Task absent when no capable settlers**
+- *Pre:* No settler with Mechanic specialty ranks.
+- *Pass:* Vehicle maintenance task does not appear in queue.
 
-**T9.3 — Doctor respects maxBandages cap**
-- *Pre:* All conditions met.  `maxBandages = 20`.
-- *Steps:* Advance days until stock hits 20.
-- *Pass:* Log says "bandage stock is at cap (20)."
+**T10.2 — Task absent when input items missing**
+- *Pre:* Woodcutter ranks present; no logs in storage.
+- *Pass:* Woodcutting task does not appear in queue.
 
-**T9.4 — Cook does not touch dry goods by default**
-- *Pre:* Storage contains only canned goods (no fresh food).  Cook role assigned.
-- *Steps:* Advance day.
-- *Pass:* Cook log warns "nothing suitable to cook (dry goods excluded by setting)."  Canned goods not consumed.
+**T10.3 — Task absent when at cap**
+- *Pre:* Thread at configured cap.
+- *Pass:* Thread-picking task does not appear in queue.
 
-**T9.5 — Cook uses perishables first**
-- *Pre:* Storage contains both fresh vegetables and canned beans.
-- *Steps:* Advance day.
-- *Pass:* Cook log says meals prepared "from perishables."  Log count > 0 for perishable meals.
+**T10.4 — Task priority reflects resource level**
+- *Pre:* Water below 50% of daily need.
+- *Pass:* Water collection task appears at Urgent tier.
 
-**T9.6 — Farmer saves seeds by default**
-- *Steps:* Advance day with Farmer assigned.
-- *Pass:* Log mentions seeds set aside.  Saved seeds appear in pending production.
+**T10.5 — Higher priority executes before lower**
+- *Pre:* 1 work unit available.  Two tasks: Urgent water collection and Low thread-picking.
+- *Pass:* Water collection executes.  Thread-picking deferred.
 
-**T9.7 — Blacksmith does not touch scrapFloor reserve**
-- *Pre:* Storage has exactly `scrapFloor` (10) scrap items.  `scrapFloor = 10`.
-- *Steps:* Advance day.
-- *Pass:* Log warns "not enough scrap above floor."  No ingots produced.  Scrap count unchanged.
+#### Group 11 — Produced Items
 
-**T9.8 — Blacksmith produces ingots when scrap exceeds floor**
-- *Pre:* Storage has 14 scrap items.  `scrapFloor = 10`, `SCRAP_PER_INGOT = 4`.
-- *Steps:* Advance day.
-- *Pass:* 1 ingot added to virtual yield.  Log confirms.  Scrap count decreases by 4.  10 items remain.
+**T11.1 — Production adds real items to containers**
+- *Pre:* Cook ranks present; perishable food in storage; space available.
+- *Steps:* Advance one day.
+- *Pass:* Meal items appear in a community container.  Log confirms with container reference.
 
-**T9.9 — Woodcutter respects maxPlanks**
-- *Steps:* Advance days until planks hit 60.
-- *Pass:* Log says "plank stock at cap (60)."
+**T11.2 — Production blocked at storage capacity**
+- *Pre:* Storage at 100% weight capacity.  Cook conditions otherwise met.
+- *Steps:* Advance one day.
+- *Pass:* Cook task absent from queue.  Log notes storage full.
 
-**T9.10 — Rancher skips when grain below floor**
-- *Pre:* Storage has exactly `minGrainReserve` (10) grain items.
-- *Steps:* Advance day.
-- *Pass:* Log warns "feed stock too low."  No yield produced.  Grain unchanged.
+**T11.3 — Storage weight displayed in Overview**
+- *Pass:* "X / Y kg" visible in Overview.  Value matches actual container contents.
 
-#### Group 10 — Virtual Yield
+#### Group 12 — Resource Floors and Caps
 
-**T10.1 — Yield accumulates in Overview**
-- *Pre:* At least one production role running.
-- *Steps:* Advance several days.  Open Overview.
-- *Pass:* "Settler production (pending):" section shows non-zero values for relevant keys.
+**T12.1 — Task excluded at cap; no work unit consumed**
+- *Pre:* Thread at cap.  1 work unit available.  Only thread-picking eligible.
+- *Steps:* Advance one day.
+- *Pass:* No work unit consumed.  Thread count unchanged.
 
-**T10.2 — Yield persists across save/load**
-- *Steps:* Let yield accumulate, save, load.  Check Overview.
-- *Pass:* Yield values unchanged after reload.
+**T12.2 — Blacksmith does not touch scrap floor**
+- *Pre:* Storage has exactly the scrap floor quantity.
+- *Steps:* Advance one day.
+- *Pass:* Blacksmith task absent.  Scrap count unchanged.
 
-**T10.3 — Multiple roles accumulate yield independently**
-- *Pre:* Tailor (thread), Fisher (fish), Blacksmith (ingots) all assigned.
-- *Steps:* Advance days.
-- *Pass:* All three yield keys show values.
+**T12.3 — Cook uses perishables first**
+- *Pre:* Storage has fresh vegetables and canned beans.
+- *Steps:* Advance one day.
+- *Pass:* Fresh items consumed.  Canned goods untouched (dry goods disabled).
 
-#### Group 11 — Role Settings
-
-**T11.1 — SetRoleSetting command works**
-- *Steps:* Send `SetRoleSetting` with `role="Tailor"`, `key="maxThread"`, `val=25`.  Advance day.
-- *Pass:* Tailor stops at 25 thread.  Log confirms cap at 25.
-
-**T11.2 — Invalid key rejected**
-- *Steps:* Send `SetRoleSetting` with `key="notakey"`.
-- *Pass:* Server logs rejection.  Role settings unchanged.
-
-**T11.3 — Settings persist across save/load**
-- *Steps:* Set Tailor thread cap to 25, save, load.
-- *Pass:* Tailor thread cap is still 25 after reload.
+**T12.4 — Farmer retains seed fraction**
+- *Steps:* Advance one day with Farmer conditions met.
+- *Pass:* Seed items appear in storage.  Log confirms fraction retained.
 
 ---
 
@@ -1138,16 +1174,16 @@ Run after Phase 1 tests pass.  Requires: bastion established, at least one settl
 | 11 | Backstory seed tables | Partial | Basic tables implemented; may need more variety |
 | 12 | Settler right-click dialogue — authored per tag or templated? | Open | Templated with tag substitution likely sufficient |
 | 13 | Subjective score set — are Happiness / Resolve / Education correct? | Open | Revisit after Phase 3 with real data |
-| 14 | NPC representation long-term | Open | Option A (mannequins) for Phase 1–2; revisit at Phase 3 |
+| 14 | NPC representation long-term | **Resolved** | No mannequins.  Walking NPCs deferred to Phase 4+ using IsoZombie hijacking (Bandits mod pattern).  See Section 12. |
 | 15 | Bundled profession skill advancement | Open | Recommendation: track each skill separately |
-| 16 | Storage capacity units — weight or slot count? | Open | Weight is more PZ-like; slot count simpler to display |
+| 16 | Storage capacity units — weight or slot count? | **Resolved** | Weight.  Display as `current / max kg` in Overview. |
 | 17 | Item registry rebuild frequency | Open | Every tick (simplest); may optimize later |
 | 18 | Ambient sound trigger — on tick or independent timer? | Open | Tick-triggered simplest; independent allows time-of-day variation |
 | 19 | Noise budget UI | **Resolved** | Tiered presets (Silent/Quiet/Normal/Loud) in Settings tab |
 | 20 | Teacher reading speed: does PZ expose book reading rate in Lua? | Open | Need to verify `IsoPlayer:getReadingSpeed()` or equivalent in B42 |
-| 21 | Virtual yield claiming: which container does output land in? | Open | Phase 3 design decision; recommendation: nearest non-private with space |
-| 22 | Item type strings for virtual yield claiming (Thread, BandageSterilized, IronIngot) | Open | Verify against PZ B42 item registry before Phase 3 |
-| 23 | Role settings UI: editable fields in Settings tab vs. separate per-settler panel? | Open | Phase 3 design; per-role settings (not per-settler) in Settings tab recommended |
+| 21 | Virtual yield claiming | **Resolved** | Removed.  Production places real items directly into storage.  No claiming step. |
+| 22 | Item type strings for each role's produced items | Open | Must verify each role's output item type against B42 item registry before implementing that role's production step. |
+| 23 | Role settings UI: editable fields in Settings tab | Open | Phase 3 design; per-role settings (not per-settler) in Settings tab. |
 | 24 | Trapper: can `IsoTrap` be found via `instanceof` and `sq:getObjects()` in B42? | Open | Phase 2 implementation; verify in test environment |
 | 25 | WaterCarrier: does `sq:isWater()` reliably identify ponds and rivers in B42? | **Resolved** | `sq:isWater()` throws a Java exception that escapes Kahlua `pcall` in B42 — cannot be used at all.  Natural water terrain detection deferred; sprite-name scan (rain barrels, wells) is the current fallback.  See OQ #26 for a safe alternative. |
 | 26 | Natural water terrain (ponds, rivers): B42-safe detection method? | Open | `sq:isWater()` is off the table (see OQ #25).  Candidates: iterate `sq:getObjects()` looking for water-tagged sprite names; check tile definition via `TileDefinition`; use `getWorld():getWater()` if it exists.  None confirmed in B42 yet. |
@@ -1155,8 +1191,10 @@ Run after Phase 1 tests pass.  Requires: bastion established, at least one settl
 | 28 | `WorldToScreen` / tile overlay draw hook in B42: what is the correct API? | Open | Need to confirm the right event hook (likely `Events.OnPostRenderFloor` or `Events.OnRenderTick`) and whether tile-space coordinate conversion is exposed via Lua.  Required for radius visualization (Section 3.2). |
 | 29 | Bed sprite name substrings: what names cover all single beds, double beds, and cots in B42? | Open | Candidates: `"bed"`, `"cot"`, `"mattress"`.  Verify against PZ B42 furniture sprite list before implementation. |
 | 30 | Work site recipe lookup API: is `CraftRecipeManager` (or equivalent) the right approach in B42? | Open | Recipe-based detection preferred over hardcoded sprite lists for mod compatibility.  Need to confirm the API surface, whether it exposes required objects/surfaces per recipe, and performance implications of calling it at tick time. |
+| 31 | Work unit cost per task: always 1, or do complex tasks cost more? | Open | Starting assumption: 1 unit per task.  Revisit during Phase 2 playtesting if production feels too fast or too slow. |
+| 32 | Daily food and water consumption per settler: what are the right quantities? | Open | Balance pass during Phase 2 playtesting.  Starting point: 1 meal and 1 water item per settler per day. |
 
 ---
 
-*Bastion Design Document v1.2*
+*Bastion Design Document v2.0*
 *Design before code.  Tests before implementation.  Update this file whenever a decision changes.*

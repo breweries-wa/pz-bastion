@@ -677,7 +677,7 @@ end
 
 -- Returns work budget = sum of settler contributions modified by mood.
 local function calcWorkUnits(rec)
-    local total = 0
+    local total = 0.0
     for _, settler in ipairs(rec.settlers or {}) do
         local mood = settler.mood or "Content"
         if     mood == "Critical"   then total = total + 0.1

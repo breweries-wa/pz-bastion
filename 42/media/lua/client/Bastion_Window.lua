@@ -84,10 +84,10 @@ end
 
 ---@class BastionOverviewPanel : ISPanel
 ---@field rows { text:string, r:number, g:number, b:number, indent:boolean }[]
-BastionOverviewPanel = ISPanel:derive("BastionOverviewPanel")
+BastionOverviewPanel = ISPanel:derive("BastionOverviewPanel") --[[@as BastionOverviewPanel]]
 
 function BastionOverviewPanel:new(x, y, w, h)
-    local o = ISPanel.new(self, x, y, w, h)
+    local o = ISPanel.new(self, x, y, w, h) --[[@as BastionOverviewPanel]]
     o.backgroundColor = { r=0, g=0, b=0, a=0 }
     o.borderColor     = { r=0, g=0, b=0, a=0 }
     o.rows            = {}
@@ -231,10 +231,10 @@ end
 ---@class BastionSettlersPanel : ISPanel
 ---@field listbox ISScrollingListBox|nil
 ---@field listH   number
-BastionSettlersPanel = ISPanel:derive("BastionSettlersPanel")
+BastionSettlersPanel = ISPanel:derive("BastionSettlersPanel") --[[@as BastionSettlersPanel]]
 
 function BastionSettlersPanel:new(x, y, w, h)
-    local o = ISPanel.new(self, x, y, w, h)
+    local o = ISPanel.new(self, x, y, w, h) --[[@as BastionSettlersPanel]]
     o.backgroundColor = { r=0, g=0, b=0, a=0 }
     o.borderColor     = { r=0, g=0, b=0, a=0 }
     o.listbox         = nil
@@ -350,10 +350,10 @@ end
 
 ---@class BastionLogTabPanel : ISPanel
 ---@field listbox ISScrollingListBox|nil
-BastionLogTabPanel = ISPanel:derive("BastionLogTabPanel")
+BastionLogTabPanel = ISPanel:derive("BastionLogTabPanel") --[[@as BastionLogTabPanel]]
 
 function BastionLogTabPanel:new(x, y, w, h)
-    local o = ISPanel.new(self, x, y, w, h)
+    local o = ISPanel.new(self, x, y, w, h) --[[@as BastionLogTabPanel]]
     o.backgroundColor = { r=0, g=0, b=0, a=0 }
     o.borderColor     = { r=0, g=0, b=0, a=0 }
     o.listbox         = nil
@@ -422,10 +422,10 @@ end
 ---@field noiseBtns         ISButton[]
 ---@field disbandBtn        ISButton|nil
 ---@field disbandConfirmBtn ISButton|nil
-BastionSettingsPanel = ISPanel:derive("BastionSettingsPanel")
+BastionSettingsPanel = ISPanel:derive("BastionSettingsPanel") --[[@as BastionSettingsPanel]]
 
 function BastionSettingsPanel:new(x, y, w, h, player)
-    local o = ISPanel.new(self, x, y, w, h)
+    local o = ISPanel.new(self, x, y, w, h) --[[@as BastionSettingsPanel]]
     o.backgroundColor   = { r=0, g=0, b=0, a=0 }
     o.borderColor       = { r=0, g=0, b=0, a=0 }
     o.player            = player
@@ -544,10 +544,11 @@ end
 ---@field settlersPanel   BastionSettlersPanel|nil
 ---@field logPanel        BastionLogTabPanel|nil
 ---@field settingsPanel   BastionSettingsPanel|nil
-BastionWindow = ISPanel:derive("BastionWindow")
+---@field _instance       BastionWindow|nil
+BastionWindow = ISPanel:derive("BastionWindow") --[[@as BastionWindow]]
 
 function BastionWindow:new(x, y, player)
-    local o = ISPanel.new(self, x, y, DEF_W, DEF_H)
+    local o = ISPanel.new(self, x, y, DEF_W, DEF_H) --[[@as BastionWindow]]
     o.backgroundColor = { r=0.05, g=0.04, b=0.08, a=0.92 }
     o.borderColor     = { r=0.5,  g=0.4,  b=0.7,  a=0.90 }
     o.player          = player

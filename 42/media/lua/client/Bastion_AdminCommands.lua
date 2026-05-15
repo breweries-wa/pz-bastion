@@ -29,7 +29,7 @@ Events.OnPlayerSay.Add(function(playerOrIndex, message)
     -- Normalise: player might be passed as an index in some PZ versions.
     local player
     if type(playerOrIndex) == "number" then
-        player = getSpecificPlayer(playerOrIndex)
+        player = getSpecificPlayer(math.floor(playerOrIndex))
     else
         player = playerOrIndex
     end

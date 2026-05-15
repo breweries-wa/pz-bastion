@@ -82,6 +82,8 @@ end
 -- Overview Tab
 -- ─────────────────────────────────────────────────────────────────────────────
 
+---@class BastionOverviewPanel : ISPanel
+---@field rows { text:string, r:number, g:number, b:number, indent:boolean }[]
 BastionOverviewPanel = ISPanel:derive("BastionOverviewPanel")
 
 function BastionOverviewPanel:new(x, y, w, h)
@@ -226,6 +228,9 @@ end
 -- Settlers Tab
 -- ─────────────────────────────────────────────────────────────────────────────
 
+---@class BastionSettlersPanel : ISPanel
+---@field listbox ISScrollingListBox|nil
+---@field listH   number
 BastionSettlersPanel = ISPanel:derive("BastionSettlersPanel")
 
 function BastionSettlersPanel:new(x, y, w, h)
@@ -343,6 +348,8 @@ end
 -- Log Tab
 -- ─────────────────────────────────────────────────────────────────────────────
 
+---@class BastionLogTabPanel : ISPanel
+---@field listbox ISScrollingListBox|nil
 BastionLogTabPanel = ISPanel:derive("BastionLogTabPanel")
 
 function BastionLogTabPanel:new(x, y, w, h)
@@ -410,6 +417,11 @@ end
 -- Settings Tab
 -- ─────────────────────────────────────────────────────────────────────────────
 
+---@class BastionSettingsPanel : ISPanel
+---@field player            IsoPlayer|nil
+---@field noiseBtns         ISButton[]
+---@field disbandBtn        ISButton|nil
+---@field disbandConfirmBtn ISButton|nil
 BastionSettingsPanel = ISPanel:derive("BastionSettingsPanel")
 
 function BastionSettingsPanel:new(x, y, w, h, player)
@@ -511,6 +523,27 @@ end
 -- Main Window
 -- ─────────────────────────────────────────────────────────────────────────────
 
+---@class BastionWindow : ISPanel
+---@field player          IsoPlayer|nil
+---@field winW            number
+---@field winH            number
+---@field dragging        boolean
+---@field dragMouseX      number
+---@field dragMouseY      number
+---@field dragWinX        number
+---@field dragWinY        number
+---@field resizing        boolean
+---@field resizeOriginMX  number
+---@field resizeOriginMY  number
+---@field resizeOriginW   number
+---@field resizeOriginH   number
+---@field refreshCounter  number
+---@field currentTab      string
+---@field closeBtn        ISButton|nil
+---@field overviewPanel   BastionOverviewPanel|nil
+---@field settlersPanel   BastionSettlersPanel|nil
+---@field logPanel        BastionLogTabPanel|nil
+---@field settingsPanel   BastionSettingsPanel|nil
 BastionWindow = ISPanel:derive("BastionWindow")
 
 function BastionWindow:new(x, y, player)

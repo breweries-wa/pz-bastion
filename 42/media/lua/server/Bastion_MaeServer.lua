@@ -1683,8 +1683,9 @@ local function onClientCommand(module, command, player, args)
                         local obj = objs:get(i)
                         objCount = objCount + 1
 
-                        -- Java class name
+                        -- Java class name (java.lang.Object.getClass() -- not in PZ stubs)
                         local ok0, cls = pcall(function()
+                            ---@diagnostic disable-next-line: undefined-field
                             return tostring(obj:getClass():getSimpleName())
                         end)
                         local className = (ok0 and cls) or "?"

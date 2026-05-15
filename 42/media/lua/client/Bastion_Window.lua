@@ -483,8 +483,8 @@ function BastionSettingsPanel.makeNoiseHandler(level)
 end
 
 function BastionSettingsPanel:onDisbandFirst()
-    self.disbandBtn:setVisible(false)
-    self.disbandConfirmBtn:setVisible(true)
+    if self.disbandBtn        then self.disbandBtn:setVisible(false)        end
+    if self.disbandConfirmBtn then self.disbandConfirmBtn:setVisible(true)  end
 end
 
 function BastionSettingsPanel:onDisbandConfirm()
@@ -736,6 +736,7 @@ function BastionWindow:onMouseDown(x, y)
     return true
 end
 
+---@return boolean
 function BastionWindow:onMouseUp(x, y)
     self.dragging = false
     self.resizing = false

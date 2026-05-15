@@ -57,9 +57,9 @@ local function scanContainers(rec)
     if not cell then
         return {
             general={}, refrigerated={}, frozen={},
-            capacity={ general=0, refrigerated=0, frozen=0 },
+            capacity={ general=0.0, refrigerated=0.0, frozen=0.0 },
             itemMap={}, allContainers={},
-            weight={ current=0, max=0 },
+            weight={ current=0.0, max=0.0 },
         }
     end
 
@@ -67,10 +67,10 @@ local function scanContainers(rec)
         general      = {},
         refrigerated = {},
         frozen       = {},
-        capacity     = { general=0, refrigerated=0, frozen=0 },
+        capacity     = { general=0.0, refrigerated=0.0, frozen=0.0 },
         itemMap      = {},
         allContainers = {},
-        weight       = { current=0, max=0 },
+        weight       = { current=0.0, max=0.0 },
     }
 
     local bx, by = rec.bx, rec.by

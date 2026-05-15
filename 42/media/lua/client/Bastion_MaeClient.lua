@@ -75,6 +75,7 @@ end
 
 local function maeSpeak(mae, text)
     if HaloTextHelper and HaloTextHelper.addText then
+        ---@diagnostic disable-next-line: param-type-mismatch, missing-parameter
         HaloTextHelper.addText(mae, text, 5)
     end
     if addLineInChat then
